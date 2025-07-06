@@ -1,0 +1,10 @@
+{
+  "files.autoSave": "afterDelay",
+  "files.eol": "\n",
+  "files.trimTrailingWhitespace": false,
+  "editor.wordWrap": "on",
+  "editor.tabSize": 2,
+  "[markdown]": {
+    "files.trimTrailingWhitespace": false
+  }
+}
