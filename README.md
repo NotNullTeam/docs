@@ -5,14 +5,27 @@
 ## 目录结构
 ```
 docs/
-├── competition_docs/     赛事官方文件
-├── system_design/        系统详细设计文档
-├── whitepaper/           技术白皮书
-├── experiments/          试验笔记与结果
-├── project_management/   项目管理（分工、里程碑等）
 ├── assets/               项目资产
 │   ├── datasets/         数据集（raw / processed / embeddings）
-│   └── demo/             演示材料（视频、截图、PPT）
+│   │   ├── raw/
+│   │   ├── processed/
+│   │   └── embeddings/
+│   └── demo/             演示材料（PPT、截图、视频）
+│       ├── presentations/
+│       ├── screenshots/
+│       └── video/
+├── competition_docs/     赛事官方文件
+│   ├── official-requirements/
+│   └── requirements-analysis/
+├── experiments/          试验笔记与结果
+│   ├── notebooks/
+│   └── results/
+├── project_management/   项目管理（分工、里程碑等）
+├── system_design/        系统详细设计文档
+│   ├── api/
+│   ├── ui-ux-design/
+│   └── technology-selection.md
+├── whitepaper/           技术白皮书
 ├── .gitattributes
 ├── CONTRIBUTING.md       协作规范（含 Git 规范）
 ├── LICENSE
