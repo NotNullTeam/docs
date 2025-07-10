@@ -114,6 +114,9 @@
 - **认证**: 需要
 - **查询参数**:
   - `status` (string, 可选): `open` | `solved`。
+  - `vendor` (string, 可选): 过滤指定厂商，如 `Huawei`、`Cisco`、`Juniper`。
+  - `category` (string, 可选): 故障分类过滤，例如 `OSPF`、`BGP`、`MPLS`。
+  - `attachmentType` (string, 可选): `topo` | `log` | `config` | `none`。
 - **响应体**:
   ```json
   [
@@ -134,7 +137,10 @@
 - **请求体**:
   ```json
   {
-    "query": "我的OSPF邻居状态为什么卡在ExStart？"
+    "query": "我的OSPF邻居状态为什么卡在ExStart？",
+    "attachments": [
+      { "type": "image", "url": "https://example.com/topology.png", "name": "topology.png" }
+    ]
   }
   ```
 - **响应体**: 包含`caseId`, `title`, 初始`nodes`和`edges`。
@@ -169,7 +175,7 @@
     "parentNodeId": "node_ai_clarification_1",
     "response": {
       "text": "这是我获取的debug日志。",
-      "attachments": [{ "type": "log", "content": "..." }]
+      "attachments": [{ "type": "log", "url": "https://example.com/debug.log", "name": "debug.log" }]
     },
     "retrievalWeight": 0.7,          // 可选，0（关键词）~1（语义）
     "filterTags": ["OSPF", "日志"] // 可选，数组形式
@@ -273,6 +279,132 @@
   {
     "vendors": ["Huawei", "Cisco", "Juniper"],
     "faultCategories": ["OSPF", "BGP", "MPLS"],
-    "docTypes": ["RFC", "官方手册", "社区博客"]
+    "docTypes": ["RFC", "官方手册", "社区博客"],
+    "attachmentTypes": ["topo", "log", "config"]
   }
-  ``` 
+  ```
+
+### 5. 文件与附件接口 (Files)
+
+#### 5.1 上传附件
+- **Endpoint**: `POST /files`
+- **功能**: 上传单个附件（图片 / 拓扑 / 日志压缩包等），返回文件`fileId`及访问 URL。
+- **认证**: 需要
+- **请求**: `multipart/form-data`，字段名 `file`。
+- **响应体**:
+  ```json
+  {
+    "fileId": "file_abc123",
+    "url": "https://cdn.example.com/file_abc123.png"
+  }
+  ```
+
+#### 5.2 获取附件
+- **Endpoint**: `GET /files/{fileId}`
+- **功能**: 下载 / 预览附件文件。
+- **认证**: 需要（如文件权限继承案例权限）。
+- **响应**: `200 OK`, 文件流。
+
+### 6. 用户设置接口 (User Settings)
+
+#### 6.1 获取用户设置
+- **Endpoint**: `GET /user/settings`
+- **功能**: 获取当前登录用户的个性化配置（主题、通知偏好等）。
+- **认证**: 需要
+- **响应体**:
+  ```json
+  {
+    "theme": "system",          // light | dark | system
+    "notifications": {
+      "solution": true,
+      "mention": false
+    }
+  }
+  ```
+
+#### 6.2 更新用户设置
+- **Endpoint**: `PUT /user/settings`
+- **功能**: 更新用户个性化配置。
+- **认证**: 需要
+- **请求体**: 与 `GET /user/settings` 响应体结构相同，可部分字段更新。
+- **响应体**:
+  ```json
+  {
+    "status": "success"
+  }
+  ```
+
+### 7. 通知接口 (Notifications)
+
+#### 7.1 获取通知列表
+- **Endpoint**: `GET /notifications`
+- **功能**: 分页获取当前用户的历史通知。
+- **认证**: 需要
+- **查询参数**:
+  - `page` (integer, 可选, 默认 1)
+  - `pageSize` (integer, 可选, 默认 20)
+- **响应体**:
+  ```json
+  {
+    "page": 1,
+    "pageSize": 20,
+    "total": 45,
+    "items": [
+      {
+        "id": "noti_001",
+        "type": "solution",          // solution | mention | system
+        "title": "诊断案例已生成解决方案",
+        "read": false,
+        "createdAt": "2025-07-15T11:30:00Z"
+      }
+    ]
+  }
+  ```
+
+#### 7.2 标记通知已读
+- **Endpoint**: `POST /notifications/{notificationId}/read`
+- **功能**: 将指定通知标记为已读。
+- **认证**: 需要
+- **响应**: `204 No Content`
+
+### 8. API密钥接口 (API Keys)
+
+#### 8.1 生成 API 密钥
+- **Endpoint**: `POST /apikeys`
+- **功能**: 为当前用户生成新的 API Key，用于第三方集成。
+- **认证**: 需要
+- **请求体**:
+  ```json
+  {
+    "label": "Grafana Integration"
+  }
+  ```
+- **响应体**:
+  ```json
+  {
+    "keyId": "key_abc123",
+    "apiKey": "sk-...",
+    "createdAt": "2025-07-15T12:00:00Z"
+  }
+  ```
+
+#### 8.2 获取 API Key 列表
+- **Endpoint**: `GET /apikeys`
+- **功能**: 获取当前用户的 API Key 列表。
+- **认证**: 需要
+- **响应体**:
+  ```json
+  [
+    {
+      "keyId": "key_abc123",
+      "label": "Grafana Integration",
+      "createdAt": "2025-07-15T12:00:00Z"
+    }
+  ]
+  ```
+
+#### 8.3 删除 API Key
+- **Endpoint**: `DELETE /apikeys/{keyId}`
+- **功能**: 删除指定 API Key。
+- **认证**: 需要
+- **响应**: `204 No Content` 
