@@ -42,7 +42,7 @@
   "id": "node_a1b2c3d4",
   "type": "USER_QUERY" | "AI_ANALYSIS" | "AI_CLARIFICATION" | "USER_RESPONSE" | "SOLUTION",
   "title": "标题/节点摘要",
-  "status": "COMPLETED" | "AWAITING_USER_INPUT",
+  "status": "COMPLETED" | "AWAITING_USER_INPUT" | "PROCESSING",
   "content": {
     // 当 type 为 USER_QUERY / USER_RESPONSE 时
     "text": "问题文本或用户补充信息",
@@ -53,7 +53,11 @@
     "suggestedQuestions": [ "下一步该检查什么？" ],
 
     // 当 type 为 SOLUTION 时
-    "steps": [ "Step 1", "Step 2" ],
+    "answer": "为解决OSPF邻居ExStart状态问题，您需要检查接口的MTU值 [doc1]。在华为设备上，可以使用命令 `display ip interface brief` 来查看 [doc2]。",
+    "sources": [
+        { "id": "doc1", "source_document_name": "HUAWEI-OSPF故障排查手册.pdf", "page_number": 25 },
+        { "id": "doc2", "source_document_name": "华为VRP命令参考.pdf", "page_number": 112 }
+    ],
     "commands": {
       "Huawei": [ "display ospf", "display interface" ],
       "Cisco": [ "show ip ospf", "show interfaces" ]
@@ -185,7 +189,8 @@
   ```json
   {
     "newNodes": [ /* 新增节点数组 */ ],
-    "newEdges": [ /* 新增边数组 */ ]
+    "newEdges": [ /* 新增边数组 */ ],
+    "processingNodeId": "node_ai_analysis_2" // 可选，表示当前正在处理中的节点ID
   }
   ```
 
@@ -203,7 +208,11 @@
   ```json
   {
     "outcome": "solved" | "unsolved",
-    "comment": "这个解决方案非常有效！"
+    "comment": "这个解决方案非常有效！",
+    "corrected_solution": {
+      "steps": ["第一步：检查MTU值是否一致。", "第二步：重启OSPF进程。"],
+      "explanation": "原始方案缺少了重启进程的关键步骤。"
+    }
   }
   ```
 - **响应体**:
@@ -220,6 +229,7 @@
 - **认证**: 需要
 - **查询参数**:
   - `topK` (integer, 可选，默认 5): 返回的文档片段数量
+  - `vendor` (string, 可选): 按指定厂商过滤，如 `Huawei`
 - **响应体**:
   ```json
   {
@@ -250,6 +260,58 @@
       "display ospf",
       "display interface GigabitEthernet0/0/0"
     ]
+  }
+  ```
+
+#### 2.10 保存画布布局
+- **Endpoint**: `PUT /cases/{caseId}/layout`
+- **功能**: 保存用户自定义的画布节点位置布局。
+- **认证**: 需要
+- **请求体**:
+  ```json
+  {
+    "nodePositions": [
+      { "nodeId": "node_a1b2c3d4", "x": 100, "y": 200 },
+      { "nodeId": "node_e5f6g7h8", "x": 300, "y": 150 }
+    ],
+    "viewportState": {
+      "zoom": 1.2,
+      "centerX": 250,
+      "centerY": 180
+    }
+  }
+  ```
+- **响应体**: `204 No Content`
+
+#### 2.11 获取画布布局
+- **Endpoint**: `GET /cases/{caseId}/layout`
+- **功能**: 获取之前保存的画布节点位置布局。
+- **认证**: 需要
+- **响应体**:
+  ```json
+  {
+    "nodePositions": [
+      { "nodeId": "node_a1b2c3d4", "x": 100, "y": 200 },
+      { "nodeId": "node_e5f6g7h8", "x": 300, "y": 150 }
+    ],
+    "viewportState": {
+      "zoom": 1.2,
+      "centerX": 250,
+      "centerY": 180
+    }
+  }
+  ```
+
+#### 2.12 获取节点状态
+- **Endpoint**: `GET /cases/{caseId}/status`
+- **功能**: 获取当前诊断案例的整体状态，包括是否有节点正在处理中。
+- **认证**: 需要
+- **响应体**:
+  ```json
+  {
+    "caseStatus": "in_progress" | "completed" | "awaiting_input",
+    "processingNodeId": "node_ai_analysis_2", // 可选，当前正在处理中的节点ID
+    "awaitingInputNodeId": "node_ai_clarification_1" // 可选，当前等待用户输入的节点ID
   }
   ```
 
