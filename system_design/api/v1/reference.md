@@ -248,7 +248,7 @@
 - **请求体**:
   ```json
   {
-    "parentNodeId": "node_ai_clarification_1",
+    "parentNodeId": "node_a1b2c3d4",
     "response": {
       "text": "这是我获取的debug日志。",
       "attachments": [{ "type": "log", "url": "https://example.com/debug.log", "name": "debug.log" }]
@@ -389,38 +389,190 @@
 
 ### 3. 数据看板接口 (Dashboard)
 
-#### 3.1 获取系统统计
-- **Endpoint**: `GET /dashboard/stats`
-- **功能**: 获取全局统计数据。
+#### 3.1 获取统计数据
+- **Endpoint**: `GET /statistics`
+- **功能**: 获取用于渲染数据看板的聚合统计数据。
+- **认证**: 需要
+- **查询参数**:
+  - `timeRange` (string, 可选): `7d` | `30d` | `90d`。默认为 `30d`。
+- **响应体**:
+  ```json
+  {
+    "faultCategories": [
+      { "name": "VPN", "value": 120 },
+      { "name": "OSPF", "value": 95 },
+      { "name": "BGP", "value": 60 },
+      { "name": "IPsec", "value": 45 },
+      { "name": "Other", "value": 30 }
+    ],
+    "resolutionTrend": [
+      { "date": "2025-07-01", "rate": 0.80 },
+      { "date": "2025-07-02", "rate": 0.82 },
+      { "date": "2025-07-03", "rate": 0.85 }
+    ],
+    "knowledgeCoverage": [
+      { "topic": "OSPF", "vendor": "Huawei", "coverage": 95 },
+      { "topic": "OSPF", "vendor": "Cisco", "coverage": 80 },
+      { "topic": "BGP", "vendor": "Huawei", "coverage": 75 },
+      { "topic": "BGP", "vendor": "Cisco", "coverage": 70 }
+    ]
+  }
+  ```
+- **数据结构说明**:
+  - `faultCategories`: 用于故障分类饼图，`name`为分类名，`value`为案例数。
+  - `resolutionTrend`: 用于解决率趋势图，`date`为日期，`rate`为当日解决率。
+  - `knowledgeCoverage`: 用于知识覆盖度热力图，`topic`为技术主题，`vendor`为厂商，`coverage`为覆盖度百分比。
+
+### 4. 知识文档接口 (Knowledge Documents)
+
+> 用户可通过以下端点上传原始知识文档（PDF、Word、图片、Markdown 等）并查看其解析状态。后台会将文件上传至 OSS，并自动触发 IDP 解析 → 语义切分 → 向量化 → 入库流水线。
+
+#### 4.1 上传知识文档
+- **Endpoint**: `POST /knowledge/documents`
+- **功能**: 上传一个新的知识文档。
+- **认证**: 需要
+- **请求格式**: `multipart/form-data`
+- **表单字段**:
+  | 字段 | 类型 | 是否必填 | 说明 |
+  | ---- | ---- | ------ | ---- |
+  | `file` | file | 是 | 待上传的文档文件 |
+  | `tags` | string[] | 否 | 标签数组，用于元数据过滤（如["OSPF","Huawei"]） |
+  | `vendor` | string | 否 | 设备厂商标识，如 `Huawei` / `Cisco` |
+- **响应体**:
+  ```json
+  {
+    "docId": "doc_123456",
+    "status": "UPLOADING" | "PARSING" | "INDEXED",
+    "message": "上传成功，正在解析文档"
+  }
+  ```
+
+#### 4.2 获取文档列表
+- **Endpoint**: `GET /knowledge/documents`
+- **功能**: 分页获取当前用户已上传的知识文档。
+- **认证**: 需要
+- **查询参数**:
+  - `status` (string, 可选): `UPLOADING` | `PARSING` | `INDEXED` | `FAILED`
+  - `vendor` (string, 可选): 过滤指定厂商文档
+  - `page` / `pageSize` (int, 可选): 分页参数
+- **响应体**:
+  ```json
+  {
+    "items": [
+      {
+        "docId": "doc_123456",
+        "fileName": "OSPF_RFC2328.pdf",
+        "vendor": "Huawei",
+        "tags": ["OSPF"],
+        "status": "INDEXED",
+        "uploadedAt": "2025-07-20T09:00:00Z"
+      }
+    ],
+    "total": 40,
+    "page": 1,
+    "pageSize": 10
+  }
+  ```
+
+#### 4.3 获取单个文档详情
+- **Endpoint**: `GET /knowledge/documents/{docId}`
+- **功能**: 获取指定知识文档的元数据及解析进度。
 - **认证**: 需要
 - **响应体**:
   ```json
   {
-    "totalCases": 150,
-    "solvedCases": 120,
-    "averageResolutionTime": 3600
+    "docId": "doc_123456",
+    "fileName": "OSPF_RFC2328.pdf",
+    "vendor": "Huawei",
+    "tags": ["OSPF"],
+    "status": "PARSING",
+    "progress": 45,
+    "message": "正在进行OCR识别",
+    "createdAt": "2025-07-20T09:00:00Z",
+    "updatedAt": "2025-07-20T09:05:00Z"
   }
   ```
 
-### 4. 枚举信息接口 (Metadata)
+#### 4.4 删除知识文档
+- **Endpoint**: `DELETE /knowledge/documents/{docId}`
+- **功能**: 删除一个知识文档及其索引数据（需要管理员或文档上传者权限）。
+- **认证**: 需要
+- **响应**: `204 No Content`
 
-#### 4.1 获取系统标签
-- **Endpoint**: `GET /metadata/tags`
-- **功能**: 获取系统内可用于过滤的全部标签集合（如厂商、故障类型、文档类型）。
-- **认证**: 可选
+### 5. 节点相关接口 (Node-specific)
+
+#### 5.1 获取节点详情
+- **Endpoint**: `GET /cases/{caseId}/nodes/{nodeId}`
+- **功能**: 获取图中某个节点的详细信息。
+- **认证**: 需要
+- **响应体**: 单个`Node`对象。
+
+#### 5.2 提交案例反馈
+- **Endpoint**: `POST /cases/{caseId}/feedback`
+- **功能**: 对整个案例的最终结果进行反馈。
+- **认证**: 需要
+- **请求体**:
+  ```json
+  {
+    "outcome": "solved" | "unsolved",
+    "comment": "这个解决方案非常有效！",
+    "corrected_solution": {
+      "steps": ["第一步：检查MTU值是否一致。", "第二步：重启OSPF进程。"],
+      "explanation": "原始方案缺少了重启进程的关键步骤。"
+    }
+  }
+  ```
 - **响应体**:
   ```json
   {
-    "vendors": ["Huawei", "Cisco", "Juniper"],
-    "faultCategories": ["OSPF", "BGP", "MPLS"],
-    "docTypes": ["RFC", "官方手册", "社区博客"],
-    "attachmentTypes": ["topo", "log", "config"]
+    "status": "success",
+    "message": "反馈已收到。"
   }
   ```
 
-### 5. 文件与附件接口 (Files)
+#### 5.3 获取节点知识溯源
+- **Endpoint**: `GET /cases/{caseId}/nodes/{nodeId}/knowledge`
+- **功能**: 获取指定节点背后命中的文档片段及相似度，用于“知识溯源”Tab。
+- **认证**: 需要
+- **查询参数**:
+  - `topK` (integer, 可选，默认 5): 返回的文档片段数量
+  - `vendor` (string, 可选): 按指定厂商过滤，如 `Huawei`
+- **响应体**:
+  ```json
+  {
+    "nodeId": "node_ai_analysis_1",
+    "sources": [
+      {
+        "id": "doc_001",
+        "title": "RFC 2328 - OSPFv2",
+        "snippet": "If the neighbors are stuck in ExStart state, check MTU...",
+        "relevance": 0.92,
+        "url": "https://example.com/rfc2328"
+      }
+    ]
+  }
+  ```
 
-#### 5.1 上传附件
+#### 5.4 获取节点厂商命令
+- **Endpoint**: `GET /cases/{caseId}/nodes/{nodeId}/commands`
+- **功能**: 根据设备厂商返回对应的可复制命令集，用于“可复制命令”Tab。
+- **认证**: 需要
+- **查询参数**:
+  - `vendor` (string, 必需): 设备厂商，如 `Huawei`、`Cisco`、`Juniper`。
+- **响应体**:
+  ```json
+  {
+    "vendor": "Huawei",
+    "commands": [
+      "display ospf",
+      "display interface GigabitEthernet0/0/0"
+    ]
+  }
+  ```
+
+### 6. 文件与附件接口 (Files)
+
+#### 6.1 上传附件
 - **Endpoint**: `POST /files`
 - **功能**: 上传单个附件（图片 / 拓扑 / 日志压缩包等），返回文件`fileId`及访问 URL。
 - **认证**: 需要
@@ -433,15 +585,15 @@
   }
   ```
 
-#### 5.2 获取附件
+#### 6.2 获取附件
 - **Endpoint**: `GET /files/{fileId}`
 - **功能**: 下载 / 预览附件文件。
 - **认证**: 需要（如文件权限继承案例权限）。
 - **响应**: `200 OK`, 文件流。
 
-### 6. 用户设置接口 (User Settings)
+### 7. 用户设置接口 (User Settings)
 
-#### 6.1 获取用户设置
+#### 7.1 获取用户设置
 - **Endpoint**: `GET /user/settings`
 - **功能**: 获取当前登录用户的个性化配置（主题、通知偏好等）。
 - **认证**: 需要
@@ -456,7 +608,7 @@
   }
   ```
 
-#### 6.2 更新用户设置
+#### 7.2 更新用户设置
 - **Endpoint**: `PUT /user/settings`
 - **功能**: 更新用户个性化配置。
 - **认证**: 需要
@@ -468,9 +620,9 @@
   }
   ```
 
-### 7. 通知接口 (Notifications)
+### 8. 通知接口 (Notifications)
 
-#### 7.1 获取通知列表
+#### 8.1 获取通知列表
 - **Endpoint**: `GET /notifications`
 - **功能**: 分页获取当前用户的历史通知。
 - **认证**: 需要
@@ -495,15 +647,15 @@
   }
   ```
 
-#### 7.2 标记通知已读
+#### 8.2 标记通知已读
 - **Endpoint**: `POST /notifications/{notificationId}/read`
 - **功能**: 将指定通知标记为已读。
 - **认证**: 需要
 - **响应**: `204 No Content`
 
-### 8. API密钥接口 (API Keys)
+### 9. API密钥接口 (API Keys)
 
-#### 8.1 生成 API 密钥
+#### 9.1 生成 API 密钥
 - **Endpoint**: `POST /apikeys`
 - **功能**: 为当前用户生成新的 API Key，用于第三方集成。
 - **认证**: 需要
@@ -522,7 +674,7 @@
   }
   ```
 
-#### 8.2 获取 API Key 列表
+#### 9.2 获取 API Key 列表
 - **Endpoint**: `GET /apikeys`
 - **功能**: 获取当前用户的 API Key 列表。
 - **认证**: 需要
@@ -537,7 +689,7 @@
   ]
   ```
 
-#### 8.3 删除 API Key
+#### 9.3 删除 API Key
 - **Endpoint**: `DELETE /apikeys/{keyId}`
 - **功能**: 删除指定 API Key。
 - **认证**: 需要
