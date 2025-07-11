@@ -32,6 +32,32 @@
 }
 ```
 
+#### 错误码说明
+
+| HTTP 状态码 | 业务错误码(`error.type`) | 错误类型 | 说明 | 示例场景 |
+| --- | --- | --- | --- | --- |
+| 400 | `INVALID_REQUEST` | 参数校验失败 | 请求体缺失必需字段或字段格式不合法 | 创建案例时缺少 `query` 字段 |
+| 401 | `UNAUTHORIZED` | 未认证 | 请求未携带或携带无效 Token | Token 过期或无效 |
+| 403 | `FORBIDDEN` | 无权限 | 当前用户无权访问该资源 | 尝试访问他人诊断案例 |
+| 404 | `NOT_FOUND` | 资源不存在 | 请求的资源不存在 | `caseId` 不存在 |
+| 409 | `CONFLICT` | 资源冲突 | 资源状态冲突，无法完成请求 | 重复创建同名 API Key |
+| 422 | `UNPROCESSABLE_ENTITY` | 业务规则校验失败 | 请求格式正确，但不满足业务规则 | 上传文件大小超限 |
+| 429 | `RATE_LIMITED` | 触发限流 | 过短时间内过多请求 | 高频调用生成解决方案接口 |
+| 500 | `INTERNAL_ERROR` | 服务器错误 | 非预期后端异常 | 数据库连接失败 |
+| 503 | `SERVICE_UNAVAILABLE` | 服务暂不可用 | 下游依赖服务不可用或维护中 | 向量数据库超时 |
+
+错误响应示例（含业务错误码）：
+```json
+{
+  "code": 404,
+  "status": "error",
+  "error": {
+    "type": "NOT_FOUND",
+    "message": "指定的 caseId 不存在"
+  }
+}
+```
+
 ## 核心概念与数据结构
 
 每一次独立的诊断过程视为一个“**诊断案例 (Case)**”。每个`Case`在逻辑上是一个有向图（Diagnostic Path），由多个“**节点 (Node)**”和连接它们的“**边 (Edge)**”组成。
@@ -71,6 +97,45 @@
 }
 ```
 
+#### Node 字段说明
+
+| 字段 | 类型 | 是否必填 | 取值 / 格式 | 说明 |
+| ---- | ---- | -------- | ----------- | ---- |
+| `id` | string | 是 | `node_<UUID>` | 节点唯一标识，由后端生成，保证在全局范围内唯一。 |
+| `type` | enum | 是 | `USER_QUERY` / `AI_ANALYSIS` / `AI_CLARIFICATION` / `USER_RESPONSE` / `SOLUTION` | 节点业务角色，不同类型驱动不同的前端渲染逻辑。 |
+| `title` | string | 是 | 任意 | 节点标题或摘要，用于列表及画布展示。 |
+| `status` | enum | 是 | `COMPLETED` / `AWAITING_USER_INPUT` / `PROCESSING` | 节点处理状态：• `PROCESSING` 表示 AI 正在生成内容；• `AWAITING_USER_INPUT` 表示等待用户补充信息；• `COMPLETED` 表示节点已完成。 |
+| `content` | object | 视 `type` 而定 | — | 节点主体内容，结构随 `type` 不同，见下表。 |
+| `metadata` | object | 否 | — | 搜索与过滤所用的附加信息，如标签、厂商、相关度等。 |
+
+> 以下子字段只在满足对应 `type` 时出现
+
+| `type` | 子字段 | 类型 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `USER_QUERY` / `USER_RESPONSE` | `text` | string | 用户输入的文本内容 |
+|  | `attachments` | Attachment[] | 用户上传的附件，结构见“Attachment 说明” |
+| `AI_ANALYSIS` | `analysis` | string | AI 对当前信息的诊断分析摘要 |
+|  | `suggestedQuestions` | string[] | AI 建议的下一步追问列表 |
+| `SOLUTION` | `answer` | string | 解决方案正文，可能包含引用标记如 `[docX]` |
+|  | `sources` | Source[] | 解决方案所引用的知识片段元数据，结构见“Source 说明” |
+|  | `commands` | object | 各厂商对应的命令集合，键为厂商名，值为命令字符串数组 |
+
+**Attachment 说明**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `type` | enum | `image` / `topo` / `log` / `config` / `other` |
+| `url` | string | 文件的可访问 URL |
+| `name` | string | 原文件名 |
+
+**Source 说明**
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `id` | string | 引用标记 ID，与 `answer` 中的 `[docX]` 对应 |
+| `source_document_name` | string | 原始文档文件名 |
+| `page_number` | integer | 页码（从 1 开始） |
+
 ### Edge (边)
 ```json
 {
@@ -78,6 +143,13 @@
   "target": "node_e5f6g7h8"  // 目标节点ID
 }
 ```
+
+#### Edge 字段说明
+
+| 字段 | 类型 | 是否必填 | 说明 |
+| ---- | ---- | -------- | ---- |
+| `source` | string | 是 | 边的起始节点 ID，应指向现有的 `Node.id` |
+| `target` | string | 是 | 边的目标节点 ID，应指向现有的 `Node.id` |
 
 ---
 
