@@ -20,53 +20,36 @@
 ##### Git LFS 安装与配置 (全体成员)
 此内容见 **[协作规范 (CONTRIBUTING.md)](../CONTRIBUTING.md)** 文档。
 
-##### 前端环境 (前端团队)
-- **Node.js**: 推荐使用 `nvm` (Node Version Manager) 来管理 Node.js 版本，以避免潜在的版本冲突。
-  ```bash
-  # 安装 nvm 并使用推荐的 LTS 版本
-  nvm install --lts
-  nvm use --lts
-  ```
-- **Yarn**: 安装项目依赖包管理器 Yarn。
-  ```bash
-  npm install -g yarn
-  ```
-- **安装依赖**: 在前端代码目录下执行。
-  ```bash
-  yarn install
-  ```
+##### 各团队所需依赖已推送至仓库。
 
-##### 后端与模型环境 (后端/模型团队)
-- **Python**: 建议使用 `pyenv` 或 `conda` 管理 Python 版本，本项目推荐使用 `Python 3.10` 或更高版本。
-- **安装依赖**: 在后端代码目录下，建议先创建并激活虚拟环境，再安装依赖。
-  ```bash
-  # 创建虚拟环境
-  python -m venv venv
-  # 激活虚拟环境 (macOS/Linux)
-  source venv/bin/activate
-  # 激活虚拟环境 (Windows)
-  .\venv\Scripts\activate
-  # 安装依赖
-  pip install -r requirements.txt
-  ```
-
-#### 1.2.2 阿里云 "0成本" 部署方案实战 (后端/模型团队)
+#### 1.2.2 阿里云服务方案部署 (后端/模型团队)
 
 ##### 前置准备：获取学生权益
-一切“0成本”部署的基础是获得阿里云的学生身份认证。
 1.  **注册与实名**：注册阿里云账号，并完成个人实名认证。
 2.  **学生认证**：访问“[高校学生“飞天加速计划”](https://developer.aliyun.com/plan/student)”页面，按照指引完成学生身份认证。
 
 ##### 步骤一：部署模型服务 (PAI-EAS)
 1.  登录阿里云控制台，进入 **“PAI-EAS 模型在线服务”**。
 2.  点击 **“部署服务”**，选择 **“模型服务市场”**。
-3.  **部署嵌入模型**:
-    - 在市场中搜索 `bge-large-zh-v1.5`。
-    - 点击“免费部署”，选择 **“免费版（1核 CPU, 2GB 内存）”** 规格，点击“一键部署”。
-    - 记录下**在线服务地址 (Endpoint)** 和 **访问令牌 (Token)**。
-4.  **部署大语言模型**:
-    - 重复以上步骤，在市场中搜索 `qwen-7b-chat-int4`。
-    - 同样使用 **“免费版”** 规格进行部署，并记录下其 **Endpoint** 和 **Token**。
+
+3.  **部署向量模型 (`bge-m3`)**:
+    - 访问[PAI模型在线服务(EAS)](https://pai.console.aliyun.com/?regionId=cn-hangzhou#/eas)控制台。
+    - 点击“创建服务”，选择“模型市场”，在搜索框中输入 `bge-m3` 并搜索。
+    - 点击“免费部署”，选择 **“免费版（1核 CPU, 2GB 内存）”** 规格或任何可用的免费规格，点击“一键部署”。
+    - 部署成功后，在服务详情页记录下 **服务访问地址 (Endpoint)** 和 **访问凭证 (Token)**。这是后端调用模型API的凭证。
+
+4.  **部署重排序模型 (`bge-reranker-v2-m3`)**:
+    - 重复以上步骤，在模型市场中搜索 `bge-reranker-v2-m3`。
+    - 同样使用可用的 **“免费版”** 规格进行部署，并记录下其 **Endpoint** 和 **Token**。
+
+5.  **开通并使用百炼大模型服务 (LLM)**:
+    - **背景**: 鉴于我们拥有百万免费Token额度，并且为了简化部署、加快开发速度，我们选择使用阿里云百炼平台作为大语言模型服务。
+    - **操作步骤**:
+        - 访问[百炼大模型平台控制台](https://bailian.console.aliyun.com/)。
+        - 在左侧导航栏，选择 **模型中心 -> 模型列表**，可以看到如 `qwen-plus`, `qwen-max` 等可用模型。本项目推荐使用 `qwen-plus`，在成本和性能上取得了很好的平衡。
+        - 在左侧导航栏，选择 **API Key 管理**。
+        - 点击 **创建API Key**，妥善保管好生成的 `API Key`。这个 Key 将用于后端服务的认证。
+        - **注意**: 调用百炼模型API时，您还需要指定您想使用的模型名称（例如`qwen-plus`）。具体的API调用方式请参考百炼平台的官方文档。
 
 ##### 步骤二：创建存储服务 (OSS & RDS)
 1.  **对象存储 OSS**:
@@ -77,11 +60,11 @@
     - 进入“关系型数据库 RDS”控制台，申请一个免费试用或学生优惠的MySQL实例。
     - 创建后，设置**数据库账号和密码**，并将IP地址添加到**白名单**。
     - **额外准备**：在该实例中初始化表 `knowledge_document`，字段示例：`id`(PK)、`file_name`、`vendor`、`tags`(JSON)、`status`、`oss_path`、`user_id`、`created_at`、`updated_at`。
-3.  **消息队列（可选但推荐）**:
-    - 为了异步触发文档解析与重试，可在“MNS / Kafka”中新建一个 Topic `doc-parse-jobs`。
-    - 上传成功的文档由后端写入队列，FC 解析函数订阅消费，提高解耦性与可靠性。
+3.  **数据库任务队列（推荐）**:
+    - 为了异步触发文档解析与重试，我们将利用已有的 **RDS for MySQL** 实例模拟一个任务队列。
+    - **额外准备**：在数据库中新建一张 `parsing_jobs` 表，用于管理待处理的文档解析任务。字段示例：`id`(PK)、`document_id`(FK)、`status`('pending', 'processing', 'completed', 'failed')、`attempts`(重试次数)、`created_at`、`updated_at`。
 
-##### 步骤三：创建向量数据库 (以OpenSearch为例)
+##### 步骤三：创建OpenSearch向量数据库
 1.  进入 **“阿里云OpenSearch”** 控制台，选择 **“向量检索版”**。
 2.  申请开通“新用户免费试用套餐”，并 **“创建实例”**。
 3.  实例创建后，创建一个新的**索引**，并记录下实例的**公网访问地址**和**API密钥**。
@@ -150,7 +133,7 @@
 
     - [ ] **任务2：高级知识处理流水线**
         - **步骤**:
-            - 编写由OSS触发的**函数计算 (FC)** 函数。
+            - 编写**定时触发**的**函数计算 (FC)** 函数，用于轮询`parsing_jobs`表。
             - **集成IDP服务**：调用**文档智能（Document Mind）API**取代传统解析库，对上传的文档进行细粒度解析和版面分析。
             - **实现语义切分**：基于IDP返回的结构化数据（如层级树），实现语义感知的文本切分。
             - **向量化与入库**：调用BGE模型API向量化，并将结构化文本块及元数据写入向量数据库。
@@ -158,9 +141,9 @@
 
     - [ ] **任务3：混合检索API核心**
         - **步骤**:
-            - 利用 `LangChain` 的 **`EnsembleRetriever`** 实现向量与关键词的混合检索。
-            - 使用 **RRF (倒数排名融合)** 算法对结果重排序。
-        - **关键技术栈**: `LangChain`, `Weaviate/OpenSearch`
+            - 实现**两阶段检索**：首先通过向量+关键词召回候选文档，然后调用**bge-reranker**模型进行精准排序。
+            - 最终选取精排后的Top-K结果作为LLM的上下文。
+        - **关键技术栈**: `LangChain`, `OpenSearch`, `PAI-EAS (bge-reranker)`
 
     - [ ] **任务4：Agentic多轮对话框架**
         - **步骤**:
@@ -181,8 +164,8 @@
             - 创建 `POST /knowledge/documents` 端点，接收多部分文件并存储至 OSS；写入 `knowledge_document` 表保存元数据。
             - 创建 `GET /knowledge/documents`、`GET /knowledge/documents/{docId}`、`DELETE /knowledge/documents/{docId}` 接口。
             - **新增** `PUT /knowledge/documents/{docId}/reparse`：支持失败后重试，重新投递解析任务。
-            - 上传成功后，将文件路径写入 **`doc-parse-jobs` Topic**（或直接调用解析函数），由 FC 解析并回写状态。
-        - **关键技术栈**: `Flask`, `SQLAlchemy`, `OSS SDK`, `阿里云SDK`, `MNS / Kafka`
+            - 上传成功后，在 **`parsing_jobs` 表中插入一条新记录**，由定时轮询的 FC 函数负责消费，并最终回写状态到`knowledge_document`表。
+        - **关键技术栈**: `Flask`, `SQLAlchemy`, `OSS SDK`
 
 ### C. 模型应用与调优团队 (2人)
 - **核心目标**: 完成数据清洗、向量数据库构建、大模型接口集成与提示词工程优化。

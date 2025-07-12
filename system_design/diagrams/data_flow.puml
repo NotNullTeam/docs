@@ -3,65 +3,68 @@
 ' Author: 项目文档自动生成
 ' Encoding: UTF-8
 
-title IP智慧解答专家系统 — 数据链路流程图
+title IP智慧解答专家系统 — 数据链路全景图
 
 actor 用户
 participant 前端
 participant Backend as "后端\nFlask + langgraph"
-database RDS as "关系型数据库\nMySQL"
-database OSS as "对象存储 OSS"
-queue MQ as "doc-parse-jobs\n(MNS / Kafka)"
+database RDS as "关系型数据库\n(阿里云 RDS - MySQL)"
+database OSS as "对象存储\n(阿里云 OSS)"
+participant Scheduler as "FC Scheduler\n(定时触发)"
 participant Parser as "FC 函数\nDoc Parser"
-participant DM as "文档智能\nDocument Mind"
+participant DM as "IDP\n(阿里云 Document Mind)"
 participant Chunker as "FC 函数\nChunk & Embed"
-participant BGE as "BGE 嵌入模型\nPAI-EAS"
-database VectorDB as "向量数据库\nWeaviate"
-participant Retriever as "混合检索\nEnsembleRetriever"
-participant Qwen as "大模型生成\nQwen (PAI-EAS)"
+participant BGE as "bge-m3 嵌入模型\n(阿里云 PAI-EAS)"
+database VectorDB as "向量数据库\n(阿里云 OpenSearch)"
+participant Retriever as "召回模块\n(向量+BM25)"
+participant Reranker as "bge-reranker 精排模型\n(阿里云 PAI-EAS)"
+participant Bailian as "大模型生成\n(阿里云百炼  Qwen-plus)"
 participant LangSmith as "可观测性\nLangSmith"
 participant Dashboard as "数据看板\n前端ECharts"
 Backend --> LangSmith : Trace (链路日志)
 
-== 文档入库 ==
+== 文档入库 (异步任务) ==
 用户 -> 前端 : 拖拽/选择文件
 前端 -> Backend : POST /knowledge/documents (multipart)
 Backend -> OSS : 上传原始文件
-Backend -> RDS : 写入 metadata (status=UPLOADING)
-Backend -> MQ : 推送解析任务
+Backend -> RDS : 写入 metadata & 创建 job (status=pending)
 
-== 文档解析 ==
-MQ -> Parser : 触发解析函数
+== 文档处理 (定时轮询) ==
+Scheduler -> RDS : 查询 pending jobs
+Scheduler -> Parser : 触发解析函数 (携带 job info)
+Parser -> RDS : 更新 job status=processing
 Parser -> OSS : 下载文件
 Parser -> DM : 调用 IDP 解析 (电子+OCR/NLP)
 DM --> Parser : 结构化 JSON/Markdown
 Parser -> OSS : 存储 parsed 文件
-Parser -> RDS : 更新 status=PARSING
+Parser -> RDS : 更新 doc status=PARSING
 note right of Parser
   解析失败时更新 status=FAILED
   支持 PUT /knowledge/documents/{docId}/reparse 重试
 end note
-Parser -> MQ : 推送切分任务
+Parser -> Chunker : 直接调用/触发下一步
 
 == 语义切分 & 入库 ==
-MQ -> Chunker : 触发切分函数
 Chunker -> OSS : 读取 parsed 文件
 Chunker -> BGE : 文本向量化
 BGE --> Chunker : 向量结果
 Chunker -> VectorDB : 写入向量 + 元数据
-Chunker -> RDS : 更新 status=INDEXED
+Chunker -> RDS : 更新 doc status=INDEXED, job status=completed
 note right of Chunker
   若入库失败, 更新 status=FAILED
   并可重新触发切分任务
 end note
 
-== 问答流程 ==
+== 问答流程 (召回+精排) ==
 用户 -> 前端 : 提问 (+ 可选截图)
 前端 -> Backend : POST /cases
-Backend -> Retriever : 调用混合检索器
+Backend -> Retriever : 调用召回模块
 Retriever -> VectorDB : 查询向量 & BM25
-Retriever --> Backend : Top-K 片段
-Backend -> Qwen : Prompt + Context
-Qwen --> Backend : 解决方案 (分步骤/引用)
+Retriever --> Backend : 返回候选片段 (例如 Top 50)
+Backend -> Reranker : 问题 + 候选片段
+Reranker --> Backend : 返回精排后片段 (例如 Top 5)
+Backend -> Bailian : Prompt + 精排后 Context
+Bailian --> Backend : 解决方案 (分步骤/引用)
 Backend -> RDS : 存节点 & 边
 Backend -> 前端 : 返回诊断路径图
 前端 -> 用户 : 渲染方案 / 引用 / 进度
@@ -89,9 +92,12 @@ Backend --> 前端 : access_token (JWT)
 loop 用户补充信息
     用户 -> 前端 : 补充信息 / 上传附件
     前端 -> Backend : POST /cases/{id}/interactions
-    Backend -> Retriever : 混合检索 (EnsembleRetriever)
+    Backend -> Retriever : 调用召回模块
     Retriever -> VectorDB : 查询向量 & BM25
-    Backend -> Qwen : 生成分析 / 追问 / 方案
+    Retriever --> Backend : 返回候选片段
+    Backend -> Reranker : 问题 + 候选片段
+    Reranker --> Backend : 返回精排后片段
+    Backend -> Bailian : 生成分析 / 追问 / 方案
     Backend -> RDS : 存新增节点 & 边
     Backend --> 前端 : newNodes / newEdges
     前端 -> 用户 : 更新画布
@@ -103,4 +109,4 @@ Backend -> RDS : 聚合统计
 Backend --> 前端 : JSON stats
 前端 -> Dashboard : 渲染图表
 
-@enduml 
+@enduml
