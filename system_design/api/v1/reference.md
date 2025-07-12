@@ -40,7 +40,7 @@
 | 401 | `UNAUTHORIZED` | 未认证 | 请求未携带或携带无效 Token | Token 过期或无效 |
 | 403 | `FORBIDDEN` | 无权限 | 当前用户无权访问该资源 | 尝试访问他人诊断案例 |
 | 404 | `NOT_FOUND` | 资源不存在 | 请求的资源不存在 | `caseId` 不存在 |
-| 409 | `CONFLICT` | 资源冲突 | 资源状态冲突，无法完成请求 | 重复创建同名 API Key |
+| 409 | `CONFLICT` | 资源冲突 | 资源状态冲突，无法完成请求 | 重复创建同名案例 |
 | 422 | `UNPROCESSABLE_ENTITY` | 业务规则校验失败 | 请求格式正确，但不满足业务规则 | 上传文件大小超限 |
 | 429 | `RATE_LIMITED` | 触发限流 | 过短时间内过多请求 | 高频调用生成解决方案接口 |
 | 500 | `INTERNAL_ERROR` | 服务器错误 | 非预期后端异常 | 数据库连接失败 |
@@ -305,16 +305,50 @@
 
 #### 2.7 提交案例反馈
 - **Endpoint**: `POST /cases/{caseId}/feedback`
-- **功能**: 对整个案例的最终结果进行反馈。
+- **功能**: 对整个案例的最终结果进行反馈，支持知识自进化流程。
 - **认证**: 需要
 - **请求体**:
   ```json
   {
-    "outcome": "solved" | "unsolved",
+    "outcome": "solved" | "unsolved" | "partially_solved",
+    "rating": 5,
     "comment": "这个解决方案非常有效！",
     "corrected_solution": {
-      "steps": ["第一步：检查MTU值是否一致。", "第二步：重启OSPF进程。"],
-      "explanation": "原始方案缺少了重启进程的关键步骤。"
+      "steps": [
+        "第一步：检查MTU值是否一致。",
+        "第二步：重启OSPF进程。",
+        "第三步：验证邻居状态。"
+      ],
+      "explanation": "原始方案缺少了重启进程的关键步骤和验证环节。",
+      "commands": {
+        "Huawei": [
+          "display interface mtu",
+          "reset ospf process",
+          "display ospf peer"
+        ],
+        "Cisco": [
+          "show interface mtu",
+          "clear ip ospf process",
+          "show ip ospf neighbor"
+        ]
+      },
+      "references": ["RFC2328", "华为VRP配置指南第3章"],
+      "testResults": {
+        "beforeFix": "邻居状态ExStart",
+        "afterFix": "邻居状态Full",
+        "verificationCommands": ["display ospf peer", "ping 192.168.1.2"]
+      }
+    },
+    "knowledgeContribution": {
+      "isNewSolution": true,
+      "applicableScenarios": ["MTU不匹配", "OSPF邻居异常"],
+      "difficultyLevel": "intermediate",
+      "estimatedImpact": "high"
+    },
+    "additionalContext": {
+      "deviceModels": ["NE40E-X8", "ASR9000"],
+      "networkScale": "enterprise",
+      "resolutionTime": 1800
     }
   }
   ```
@@ -322,7 +356,11 @@
   ```json
   {
     "status": "success",
-    "message": "反馈已收到。"
+    "message": "反馈已收到，感谢您的贡献！",
+    "feedbackId": "feedback_001",
+    "knowledgeStatus": "pending_review",
+    "estimatedReviewTime": "2-3个工作日",
+    "contributionPoints": 50
   }
   ```
 
@@ -333,6 +371,7 @@
 - **查询参数**:
   - `topK` (integer, 可选，默认 5): 返回的文档片段数量
   - `vendor` (string, 可选): 按指定厂商过滤，如 `Huawei`
+  - `retrievalWeight` (float, 可选): 检索权重，0(关键词优先)~1(语义优先)
 - **响应体**:
   ```json
   {
@@ -343,9 +382,40 @@
         "title": "RFC 2328 - OSPFv2",
         "snippet": "If the neighbors are stuck in ExStart state, check MTU...",
         "relevance": 0.92,
-        "url": "https://example.com/rfc2328"
+        "url": "https://example.com/rfc2328",
+        "highlights": [
+          {
+            "text": "ExStart state",
+            "start": 45,
+            "end": 57,
+            "matchType": "keyword"
+          },
+          {
+            "text": "check MTU",
+            "start": 59,
+            "end": 68,
+            "matchType": "semantic"
+          }
+        ],
+        "matchScore": {
+          "keywordScore": 0.85,
+          "semanticScore": 0.92,
+          "finalScore": 0.89,
+          "explanation": "关键词'ExStart'完全匹配，语义理解'MTU检查'高度相关"
+        },
+        "sourceDocument": {
+          "fileName": "RFC2328-OSPF.pdf",
+          "pageNumber": 25,
+          "section": "7.2 The Neighbor Data Structure"
+        }
       }
-    ]
+    ],
+    "retrievalMetadata": {
+      "totalCandidates": 50,
+      "retrievalTime": 245,
+      "rerankTime": 89,
+      "strategy": "hybrid_search"
+    }
   }
   ```
 
@@ -418,6 +488,8 @@
   }
   ```
 
+
+
 ### 3. 数据看板接口 (Dashboard)
 
 #### 3.1 获取统计数据
@@ -430,33 +502,76 @@
   ```json
   {
     "faultCategories": [
-      { "name": "VPN", "value": 120 },
-      { "name": "OSPF", "value": 95 },
-      { "name": "BGP", "value": 60 },
-      { "name": "IPsec", "value": 45 },
-      { "name": "Other", "value": 30 }
+      { "name": "VPN", "value": 120, "percentage": 34.3, "trend": "+5.2%" },
+      { "name": "OSPF", "value": 95, "percentage": 27.1, "trend": "-2.1%" },
+      { "name": "BGP", "value": 60, "percentage": 17.1, "trend": "+1.8%" },
+      { "name": "IPsec", "value": 45, "percentage": 12.9, "trend": "+0.5%" },
+      { "name": "Other", "value": 30, "percentage": 8.6, "trend": "-1.2%" }
     ],
     "resolutionTrend": [
-      { "date": "2025-07-01", "rate": 0.80 },
-      { "date": "2025-07-02", "rate": 0.82 },
-      { "date": "2025-07-03", "rate": 0.85 }
+      { "date": "2025-07-01", "rate": 0.80, "totalCases": 45, "resolvedCases": 36 },
+      { "date": "2025-07-02", "rate": 0.82, "totalCases": 52, "resolvedCases": 43 },
+      { "date": "2025-07-03", "rate": 0.85, "totalCases": 48, "resolvedCases": 41 }
     ],
-    "knowledgeCoverage": [
-      { "topic": "OSPF", "vendor": "Huawei", "coverage": 95 },
-      { "topic": "OSPF", "vendor": "Cisco", "coverage": 80 },
-      { "topic": "BGP", "vendor": "Huawei", "coverage": 75 },
-      { "topic": "BGP", "vendor": "Cisco", "coverage": 70 }
-    ]
+    "knowledgeCoverage": {
+      "heatmapData": [
+        {
+          "topic": "OSPF",
+          "vendor": "Huawei",
+          "coverage": 95,
+          "documentCount": 45,
+          "lastUpdated": "2025-07-15T10:00:00Z",
+          "qualityScore": 0.92,
+          "gaps": ["OSPF v3配置", "NSSA区域故障"]
+        },
+        {
+          "topic": "OSPF",
+          "vendor": "Cisco",
+          "coverage": 80,
+          "documentCount": 32,
+          "lastUpdated": "2025-07-14T15:30:00Z",
+          "qualityScore": 0.85,
+          "gaps": ["OSPF LSA类型7", "虚链路配置"]
+        }
+      ],
+      "overallStats": {
+        "totalTopics": 25,
+        "averageCoverage": 78.5,
+        "criticalGaps": 3,
+        "recentlyUpdated": 12,
+        "topVendors": ["Huawei", "Cisco", "Juniper"]
+      }
+    },
+    "performanceMetrics": {
+      "averageResolutionTime": 1245,
+      "userSatisfactionRate": 0.87,
+      "knowledgeBaseUsage": {
+        "totalQueries": 2340,
+        "hitRate": 0.92,
+        "averageRetrievalTime": 234
+      }
+    },
+    "userActivity": {
+      "activeUsers": 156,
+      "newCasesToday": 23,
+      "pendingCases": 8,
+      "topUsers": [
+        {"username": "engineer_zhang", "casesResolved": 45},
+        {"username": "admin_li", "casesResolved": 38}
+      ]
+    }
   }
   ```
 - **数据结构说明**:
-  - `faultCategories`: 用于故障分类饼图，`name`为分类名，`value`为案例数。
-  - `resolutionTrend`: 用于解决率趋势图，`date`为日期，`rate`为当日解决率。
-  - `knowledgeCoverage`: 用于知识覆盖度热力图，`topic`为技术主题，`vendor`为厂商，`coverage`为覆盖度百分比。
+  - `faultCategories`: 故障分类饼图数据，增加百分比和趋势信息。
+  - `resolutionTrend`: 解决率趋势图，增加案例总数和解决数量。
+  - `knowledgeCoverage`: 知识覆盖度热力图，增加质量评分和缺口分析。
+  - `performanceMetrics`: 系统性能指标。
+  - `userActivity`: 用户活跃度统计。
 
 ### 4. 知识文档接口 (Knowledge Documents)
 
-> 用户可通过以下端点上传原始知识文档（PDF、Word、图片、Markdown 等）并查看其解析状态。后台会将文件上传至 OSS，并自动触发 IDP 解析 → 语义切分 → 向量化 → 入库流水线。
+> 用户可通过以下端点上传原始知识文档（PDF、Word、图片、Markdown 等）并查看其解析状态。后台会将文件保存到**本地文件系统**，并异步触发 IDP 解析 → 语义切分 → 向量化 → 入库流水线。
 
 #### 4.1 上传知识文档
 - **Endpoint**: `POST /knowledge/documents`
@@ -473,8 +588,8 @@
   ```json
   {
     "docId": "doc_123456",
-    "status": "UPLOADING" | "PARSING" | "INDEXED",
-    "message": "上传成功，正在解析文档"
+    "status": "QUEUED",
+    "message": "文档已加入处理队列"
   }
   ```
 
@@ -483,7 +598,7 @@
 - **功能**: 分页获取当前用户已上传的知识文档。
 - **认证**: 需要
 - **查询参数**:
-  - `status` (string, 可选): `UPLOADING` | `PARSING` | `INDEXED` | `FAILED`
+  - `status` (string, 可选): `QUEUED` | `PARSING` | `INDEXED` | `FAILED`
   - `vendor` (string, 可选): 过滤指定厂商文档
   - `page` / `pageSize` (int, 可选): 分页参数
 - **响应体**:
@@ -561,26 +676,111 @@
   }
   ```
 
+
+
 ### 5. 文件与附件接口 (Files)
 
 #### 5.1 上传附件
 - **Endpoint**: `POST /files`
 - **功能**: 上传单个附件（图片 / 拓扑 / 日志压缩包等），返回文件`fileId`及访问 URL。
 - **认证**: 需要
-- **请求**: `multipart/form-data`，字段名 `file`。
+- **请求**: `multipart/form-data`
+- **表单字段**:
+  | 字段 | 类型 | 是否必填 | 说明 |
+  | ---- | ---- | ------ | ---- |
+  | `file` | file | 是 | 待上传的文件 |
+  | `fileType` | string | 否 | 文件类型标识：`image`/`topo`/`log`/`config`/`other` |
+  | `description` | string | 否 | 文件描述信息 |
+- **文件限制**:
+  - 支持格式：PDF, PNG, JPG, JPEG, GIF, TXT, LOG, ZIP, TAR.GZ
+  - 单文件最大：50MB
+  - 图片文件最大：10MB
 - **响应体**:
   ```json
   {
     "fileId": "file_abc123",
-    "url": "https://cdn.example.com/file_abc123.png"
+    "url": "/api/v1/files/file_abc123",
+    "fileName": "network_topology.png",
+    "fileSize": 2048576,
+    "fileType": "image",
+    "mimeType": "image/png",
+    "uploadedAt": "2025-07-15T10:30:00Z",
+    "securityScan": {
+      "status": "clean",
+      "scanTime": "2025-07-15T10:30:05Z"
+    }
   }
   ```
 
 #### 5.2 获取附件
 - **Endpoint**: `GET /files/{fileId}`
 - **功能**: 下载 / 预览附件文件。
-- **认证**: 需要（如文件权限继承案例权限）。
-- **响应**: `200 OK`, 文件流。
+- **认证**: 需要（文件权限继承案例权限）
+- **查询参数**:
+  - `download` (boolean, 可选): 是否强制下载，默认为预览
+  - `thumbnail` (boolean, 可选): 是否返回缩略图（仅图片文件）
+- **响应**: `200 OK`, 文件流
+- **响应头**:
+  ```
+  Content-Type: image/png
+  Content-Length: 2048576
+  Content-Disposition: inline; filename="network_topology.png"
+  X-File-Security-Status: clean
+  ```
+
+#### 5.3 获取文件元数据
+- **Endpoint**: `GET /files/{fileId}/metadata`
+- **功能**: 获取文件的详细元数据信息。
+- **认证**: 需要
+- **响应体**:
+  ```json
+  {
+    "fileId": "file_abc123",
+    "fileName": "network_topology.png",
+    "fileSize": 2048576,
+    "fileType": "image",
+    "mimeType": "image/png",
+    "uploadedAt": "2025-07-15T10:30:00Z",
+    "uploadedBy": "user_001",
+    "associatedCases": ["case_001", "case_002"],
+    "downloadCount": 15,
+    "lastAccessed": "2025-07-15T14:20:00Z",
+    "securityScan": {
+      "status": "clean",
+      "scanTime": "2025-07-15T10:30:05Z",
+      "scanEngine": "ClamAV"
+    }
+  }
+  ```
+
+#### 5.4 批量上传附件
+- **Endpoint**: `POST /files/batch`
+- **功能**: 批量上传多个附件文件。
+- **认证**: 需要
+- **请求**: `multipart/form-data`，支持多个 `files[]` 字段
+- **响应体**:
+  ```json
+  {
+    "uploadResults": [
+      {
+        "fileName": "config1.txt",
+        "status": "success",
+        "fileId": "file_001",
+        "url": "/api/v1/files/file_001"
+      },
+      {
+        "fileName": "large_file.zip",
+        "status": "failed",
+        "error": "文件大小超过限制"
+      }
+    ],
+    "summary": {
+      "total": 2,
+      "successful": 1,
+      "failed": 1
+    }
+  }
+  ```
 
 ### 6. 用户设置接口 (User Settings)
 
@@ -598,7 +798,6 @@
     }
   }
   ```
-
 #### 6.2 更新用户设置
 - **Endpoint**: `PUT /user/settings`
 - **功能**: 更新用户个性化配置。
@@ -644,44 +843,46 @@
 - **认证**: 需要
 - **响应**: `204 No Content`
 
-### 8. API密钥接口 (API Keys)
+### 8. 智能分析接口 (AI Analysis)
 
-#### 8.1 生成 API 密钥
-- **Endpoint**: `POST /apikeys`
-- **功能**: 为当前用户生成新的 API Key，用于第三方集成。
+#### 8.1 解析技术日志
+- **Endpoint**: `POST /analysis/log-parsing`
+- **功能**: 使用大模型解析网络设备日志，提取关键信息和异常点。
 - **认证**: 需要
 - **请求体**:
   ```json
   {
-    "label": "Grafana Integration"
+    "logType": "debug_ip_packet" | "ospf_debug" | "bgp_debug" | "system_log",
+    "vendor": "Huawei" | "Cisco" | "Juniper",
+    "logContent": "原始日志内容...",
+    "contextInfo": {
+      "deviceModel": "NE40E-X8",
+      "problemDescription": "用户报告的问题描述"
+    }
   }
   ```
 - **响应体**:
   ```json
   {
-    "keyId": "key_abc123",
-    "apiKey": "sk-...",
-    "createdAt": "2025-07-15T12:00:00Z"
+    "summary": "检测到OSPF邻居建立过程中的MTU不匹配问题",
+    "anomalies": [
+      {
+        "type": "MTU_MISMATCH",
+        "severity": "high",
+        "location": "interface GE0/0/1",
+        "description": "检测到MTU不匹配问题，本端1500，对端1400"
+      }
+    ],
+    "suggestedActions": [
+      {
+        "action": "检查接口MTU配置",
+        "commands": {
+          "Huawei": ["display interface GE0/0/1", "interface GE0/0/1", "mtu 1500"],
+          "Cisco": ["show interface GigabitEthernet0/0/1", "interface GigabitEthernet0/0/1", "mtu 1500"]
+        }
+      }
+    ]
   }
   ```
 
-#### 8.2 获取 API Key 列表
-- **Endpoint**: `GET /apikeys`
-- **功能**: 获取当前用户的 API Key 列表。
-- **认证**: 需要
-- **响应体**:
-  ```json
-  [
-    {
-      "keyId": "key_abc123",
-      "label": "Grafana Integration",
-      "createdAt": "2025-07-15T12:00:00Z"
-    }
-  ]
-  ```
 
-#### 8.3 删除 API Key
-- **Endpoint**: `DELETE /apikeys/{keyId}`
-- **功能**: 删除指定 API Key。
-- **认证**: 需要
-- **响应**: `204 No Content` 

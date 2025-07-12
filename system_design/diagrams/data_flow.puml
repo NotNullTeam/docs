@@ -1,5 +1,5 @@
-@startuml
-' 数据链路全景流程图
+@startuml DataFlow
+' 数据链路全景流程图 (本地化部署版本)
 ' Author: 项目文档自动生成
 ' Encoding: UTF-8
 
@@ -7,52 +7,41 @@ title IP智慧解答专家系统 — 数据链路全景图
 
 actor 用户
 participant 前端
-participant Backend as "后端\nFlask + langgraph"
-database RDS as "关系型数据库\n(阿里云 RDS - MySQL)"
-database OSS as "对象存储\n(阿里云 OSS)"
-participant Scheduler as "FC Scheduler\n(定时触发)"
-participant Parser as "FC 函数\nDoc Parser"
-participant DM as "IDP\n(阿里云 Document Mind)"
-participant Chunker as "FC 函数\nChunk & Embed"
-participant BGE as "bge-m3 嵌入模型\n(阿里云 PAI-EAS)"
-database VectorDB as "向量数据库\n(阿里云 OpenSearch)"
+participant Backend as "后端\n(本地 Flask)"
+database RDS as "关系型数据库\n(Docker MySQL)"
+participant LocalStorage as "本地文件存储"
+participant Worker as "后台任务\n(RQ)"
+participant DM as "文档智能解析\n(阿里云IDP)"
+participant BGE as "text-embedding-v4 向量模型\n(阿里云百炼平台)"
+database VectorDB as "向量数据库\n(Docker Weaviate)"
 participant Retriever as "召回模块\n(向量+BM25)"
-participant Reranker as "bge-reranker 精排模型\n(阿里云 PAI-EAS)"
-participant Bailian as "大模型生成\n(阿里云百炼  Qwen-plus)"
-participant LangSmith as "可观测性\nLangSmith"
+participant Reranker as "Qwen3-Reranker 重排序模型\n(OLLAMA 本地部署)"
+participant Bailian as " Qwen-plus 大模型生成最终回复\n(阿里云百炼)"
+participant LangSmith as "可观测性(可选)\n(LangSmith)"
 participant Dashboard as "数据看板\n前端ECharts"
+
 Backend --> LangSmith : Trace (链路日志)
 
 == 文档入库 (异步任务) ==
 用户 -> 前端 : 拖拽/选择文件
 前端 -> Backend : POST /knowledge/documents (multipart)
-Backend -> OSS : 上传原始文件
+Backend -> LocalStorage : 上传原始文件
 Backend -> RDS : 写入 metadata & 创建 job (status=pending)
 
-== 文档处理 (定时轮询) ==
-Scheduler -> RDS : 查询 pending jobs
-Scheduler -> Parser : 触发解析函数 (携带 job info)
-Parser -> RDS : 更新 job status=processing
-Parser -> OSS : 下载文件
-Parser -> DM : 调用 IDP 解析 (电子+OCR/NLP)
-DM --> Parser : 结构化 JSON/Markdown
-Parser -> OSS : 存储 parsed 文件
-Parser -> RDS : 更新 doc status=PARSING
-note right of Parser
-  解析失败时更新 status=FAILED
+== 文档处理 (后台任务) ==
+Backend -> Worker : 触发异步解析任务 (携带 job info)
+Worker -> RDS : 更新 job status=processing
+Worker -> LocalStorage : 读取文件
+Worker -> DM : 调用 IDP 解析 (电子+OCR/NLP)
+DM --> Worker : 结构化 JSON/Markdown
+Worker -> LocalStorage : 存储 parsed 文件
+Worker -> BGE : 文本向量化
+BGE --> Worker : 向量结果
+Worker -> VectorDB : 写入向量 + 元数据
+Worker -> RDS : 更新 doc status=INDEXED, job status=completed
+note right of Worker
+  若处理失败, 更新 status=FAILED
   支持 PUT /knowledge/documents/{docId}/reparse 重试
-end note
-Parser -> Chunker : 直接调用/触发下一步
-
-== 语义切分 & 入库 ==
-Chunker -> OSS : 读取 parsed 文件
-Chunker -> BGE : 文本向量化
-BGE --> Chunker : 向量结果
-Chunker -> VectorDB : 写入向量 + 元数据
-Chunker -> RDS : 更新 doc status=INDEXED, job status=completed
-note right of Chunker
-  若入库失败, 更新 status=FAILED
-  并可重新触发切分任务
 end note
 
 == 问答流程 (召回+精排) ==
@@ -73,14 +62,13 @@ Backend -> 前端 : 返回诊断路径图
 用户 -> 前端 : 👍 / 👎 反馈
 前端 -> Backend : POST /cases/{id}/feedback
 Backend -> RDS : 记录反馈
-Backend -> MQ : (可选) 推送人工审核
 
 == 附件上传 ==
 用户 -> 前端 : 上传截图 / 日志等附件
 前端 -> Backend : POST /files (multipart)
-Backend -> OSS : 上传附件
+Backend -> LocalStorage : 上传附件
 Backend -> RDS : 写入 file metadata
-Backend --> 前端 : fileId + url
+Backend --> 前端 : fileId + url (本地路径)
 
 == 鉴权登录 ==
 用户 -> 前端 : 输入用户名/密码
@@ -104,6 +92,7 @@ loop 用户补充信息
 end loop
 
 == 统计数据看板 ==
+participant Dashboard as "数据看板\n(前端 ECharts)"
 前端 -> Backend : GET /statistics
 Backend -> RDS : 聚合统计
 Backend --> 前端 : JSON stats
