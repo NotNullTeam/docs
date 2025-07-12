@@ -182,6 +182,37 @@
 - **认证**: 需要
 - **响应**: `204 No Content`
 
+#### 1.3 刷新 Token
+- **Endpoint**: `POST /auth/refresh`
+- **功能**: 使用有效的 `refresh_token` 换取新的 `access_token`，延长会话。
+- **请求体**:
+  ```json
+  {
+    "refresh_token": "eyJhbGciOi..."
+  }
+  ```
+- **响应体**:
+  ```json
+  {
+    "access_token": "eyJhbGciOi...",
+    "token_type": "Bearer",
+    "expires_in": 3600
+  }
+  ```
+
+#### 1.4 获取当前用户信息
+- **Endpoint**: `GET /auth/me`
+- **功能**: 获取当前登录用户的基本信息，用于前端初始化。
+- **认证**: 需要
+- **响应体**:
+  ```json
+  {
+    "id": 1,
+    "username": "admin",
+    "roles": ["admin"]
+  }
+  ```
+
 ### 2. 诊断案例接口 (Case)
 
 #### 2.1 获取案例列表
@@ -381,7 +412,7 @@
 - **响应体**:
   ```json
   {
-    "caseStatus": "in_progress" | "completed" | "awaiting_input",
+    "caseStatus": "IN_PROGRESS" | "COMPLETED" | "AWAITING_INPUT",
     "processingNodeId": "node_ai_analysis_2", // 可选，当前正在处理中的节点ID
     "awaitingInputNodeId": "node_ai_clarification_1" // 可选，当前等待用户输入的节点ID
   }
@@ -499,80 +530,40 @@
 - **认证**: 需要
 - **响应**: `204 No Content`
 
-### 5. 节点相关接口 (Node-specific)
-
-#### 5.1 获取节点详情
-- **Endpoint**: `GET /cases/{caseId}/nodes/{nodeId}`
-- **功能**: 获取图中某个节点的详细信息。
+#### 4.5 重新解析知识文档
+- **Endpoint**: `PUT /knowledge/documents/{docId}/reparse`
+- **功能**: 对解析失败或需要重新 OCR 的文档重新触发解析流水线。
 - **认证**: 需要
-- **响应体**: 单个`Node`对象。
+- **响应体**:
+  ```json
+  {
+    "docId": "doc_123456",
+    "status": "PARSING",
+    "message": "已触发重新解析"
+  }
+  ```
 
-#### 5.2 提交案例反馈
-- **Endpoint**: `POST /cases/{caseId}/feedback`
-- **功能**: 对整个案例的最终结果进行反馈。
+#### 4.6 更新文档元数据
+- **Endpoint**: `PATCH /knowledge/documents/{docId}`
+- **功能**: 更新文档的标签 (`tags`) 或厂商 (`vendor`) 等元数据。
 - **认证**: 需要
 - **请求体**:
   ```json
   {
-    "outcome": "solved" | "unsolved",
-    "comment": "这个解决方案非常有效！",
-    "corrected_solution": {
-      "steps": ["第一步：检查MTU值是否一致。", "第二步：重启OSPF进程。"],
-      "explanation": "原始方案缺少了重启进程的关键步骤。"
-    }
+    "tags": ["OSPF", "BGP"],
+    "vendor": "Huawei"
   }
   ```
 - **响应体**:
   ```json
   {
-    "status": "success",
-    "message": "反馈已收到。"
+    "status": "success"
   }
   ```
 
-#### 5.3 获取节点知识溯源
-- **Endpoint**: `GET /cases/{caseId}/nodes/{nodeId}/knowledge`
-- **功能**: 获取指定节点背后命中的文档片段及相似度，用于“知识溯源”Tab。
-- **认证**: 需要
-- **查询参数**:
-  - `topK` (integer, 可选，默认 5): 返回的文档片段数量
-  - `vendor` (string, 可选): 按指定厂商过滤，如 `Huawei`
-- **响应体**:
-  ```json
-  {
-    "nodeId": "node_ai_analysis_1",
-    "sources": [
-      {
-        "id": "doc_001",
-        "title": "RFC 2328 - OSPFv2",
-        "snippet": "If the neighbors are stuck in ExStart state, check MTU...",
-        "relevance": 0.92,
-        "url": "https://example.com/rfc2328"
-      }
-    ]
-  }
-  ```
+### 5. 文件与附件接口 (Files)
 
-#### 5.4 获取节点厂商命令
-- **Endpoint**: `GET /cases/{caseId}/nodes/{nodeId}/commands`
-- **功能**: 根据设备厂商返回对应的可复制命令集，用于“可复制命令”Tab。
-- **认证**: 需要
-- **查询参数**:
-  - `vendor` (string, 必需): 设备厂商，如 `Huawei`、`Cisco`、`Juniper`。
-- **响应体**:
-  ```json
-  {
-    "vendor": "Huawei",
-    "commands": [
-      "display ospf",
-      "display interface GigabitEthernet0/0/0"
-    ]
-  }
-  ```
-
-### 6. 文件与附件接口 (Files)
-
-#### 6.1 上传附件
+#### 5.1 上传附件
 - **Endpoint**: `POST /files`
 - **功能**: 上传单个附件（图片 / 拓扑 / 日志压缩包等），返回文件`fileId`及访问 URL。
 - **认证**: 需要
@@ -585,15 +576,15 @@
   }
   ```
 
-#### 6.2 获取附件
+#### 5.2 获取附件
 - **Endpoint**: `GET /files/{fileId}`
 - **功能**: 下载 / 预览附件文件。
 - **认证**: 需要（如文件权限继承案例权限）。
 - **响应**: `200 OK`, 文件流。
 
-### 7. 用户设置接口 (User Settings)
+### 6. 用户设置接口 (User Settings)
 
-#### 7.1 获取用户设置
+#### 6.1 获取用户设置
 - **Endpoint**: `GET /user/settings`
 - **功能**: 获取当前登录用户的个性化配置（主题、通知偏好等）。
 - **认证**: 需要
@@ -608,7 +599,7 @@
   }
   ```
 
-#### 7.2 更新用户设置
+#### 6.2 更新用户设置
 - **Endpoint**: `PUT /user/settings`
 - **功能**: 更新用户个性化配置。
 - **认证**: 需要
@@ -620,9 +611,9 @@
   }
   ```
 
-### 8. 通知接口 (Notifications)
+### 7. 通知接口 (Notifications)
 
-#### 8.1 获取通知列表
+#### 7.1 获取通知列表
 - **Endpoint**: `GET /notifications`
 - **功能**: 分页获取当前用户的历史通知。
 - **认证**: 需要
@@ -647,15 +638,15 @@
   }
   ```
 
-#### 8.2 标记通知已读
+#### 7.2 标记通知已读
 - **Endpoint**: `POST /notifications/{notificationId}/read`
 - **功能**: 将指定通知标记为已读。
 - **认证**: 需要
 - **响应**: `204 No Content`
 
-### 9. API密钥接口 (API Keys)
+### 8. API密钥接口 (API Keys)
 
-#### 9.1 生成 API 密钥
+#### 8.1 生成 API 密钥
 - **Endpoint**: `POST /apikeys`
 - **功能**: 为当前用户生成新的 API Key，用于第三方集成。
 - **认证**: 需要
@@ -674,7 +665,7 @@
   }
   ```
 
-#### 9.2 获取 API Key 列表
+#### 8.2 获取 API Key 列表
 - **Endpoint**: `GET /apikeys`
 - **功能**: 获取当前用户的 API Key 列表。
 - **认证**: 需要
@@ -689,7 +680,7 @@
   ]
   ```
 
-#### 9.3 删除 API Key
+#### 8.3 删除 API Key
 - **Endpoint**: `DELETE /apikeys/{keyId}`
 - **功能**: 删除指定 API Key。
 - **认证**: 需要
