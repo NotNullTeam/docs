@@ -1,19 +1,32 @@
-# 后端开发团队任务指南
+# 后端开发与AI模型团队任务指南
 
-> **团队规模**: 3人  
-> **核心职责**: 搭建服务架构、实现混合检索算法、知识库管理、API开发  
-> **技术栈**: Python + Flask、MySQL、SQLAlchemy、RQ、Docker、JWT认证
+> **团队规模**: 5人 (原后端3人 + 原模型2人)
+> **核心职责**: 搭建服务架构、实现混合检索算法、知识库管理、API开发、AI模型集成、RAG流程优化
+> **技术栈**: Python + Flask、MySQL、SQLAlchemy、RQ、Docker、JWT认证、阿里云文档智能、langgraph、Weaviate、Qwen3系列模型、OLLAMA
 
 ## 📋 任务概览
 
 ### 主要任务清单
+
+#### 🏗️ 基础架构任务 (后端主导)
 - [ ] **任务1**: Flask项目搭建与认证系统 (预计2-3天)
-- [ ] **任务2**: 数据库设计与模型定义 (预计2-3天)  
+- [ ] **任务2**: 数据库设计与模型定义 (预计2-3天)
 - [ ] **任务3**: 核心业务API实现 (预计5-6天)
 - [ ] **任务4**: 知识文档管理API (预计3-4天)
 - [ ] **任务5**: 异步任务处理系统 (预计3-4天)
 - [ ] **任务6**: 数据看板API实现 (预计2-3天)
-- [ ] **任务7**: 系统集成与测试 (预计3-4天)
+
+#### 🤖 AI能力任务 (模型主导)
+- [ ] **任务7**: 数据收集与IDP集成 (预计3-4天)
+- [ ] **任务8**: 向量数据库构建与配置 (预计2-3天)
+- [ ] **任务9**: 混合检索算法实现 (预计4-5天)
+- [ ] **任务10**: 提示词工程与优化 (预计3-4天)
+- [ ] **任务11**: langgraph Agent流程构建 (预计5-6天)
+- [ ] **任务12**: 模型接口集成与测试 (预计2-3天)
+
+#### 🔧 集成测试任务 (全团队)
+- [ ] **任务13**: 系统集成与端到端测试 (预计3-4天)
+- [ ] **任务14**: (进阶)小模型微调 (预计5-7天，可选)
 
 ---
 
@@ -1463,11 +1476,1020 @@
 
 ---
 
-## 🎯 任务7: 系统集成与测试
+## 🎯 任务7: 数据收集与IDP集成
 
-### 7.1 API集成测试 (第1-2天)
+### 7.1 数据收集准备 (第1天)
+
+**目标**: 收集网络运维相关的知识文档，为知识库构建做准备。
+
+**负责人**: 模型团队主导，后端团队协助
+
+**具体步骤**:
+
+1. **创建数据目录结构**
+   ```bash
+   mkdir -p assets/datasets/raw/{rfc,manuals,cases,others}
+   mkdir -p assets/datasets/processed
+   mkdir -p assets/datasets/embeddings
+   ```
+
+2. **收集RFC文档** (重点收集以下RFC)
+   - RFC 2328 (OSPFv2)
+   - RFC 4271 (BGP-4)
+   - RFC 3031 (MPLS架构)
+   - RFC 4364 (BGP/MPLS IP VPN)
+   - RFC 2547 (BGP/MPLS VPN)
+
+3. **收集设备手册**
+   - 华为: VRP系统配置指南、故障处理手册
+   - 思科: IOS配置指南、故障排除手册
+   - 华三: Comware系统手册
+
+4. **收集案例文档**
+   - 网络故障案例分析
+   - 运维最佳实践文档
+   - 技术博客和论坛精华帖
+
+**验收标准**:
+- 收集到至少50个高质量文档
+- 文档按厂商和技术分类存放
+- 建立文档清单Excel表格，记录文件名、来源、分类、厂商标签
+
+### 7.2 阿里云文档智能服务集成 (第2天)
+
+**目标**: 集成阿里云文档智能服务到后端异步任务系统中。
+
+**负责人**: 模型团队主导，后端团队配合
+
+**具体步骤**:
+
+1. **完善IDP服务封装** (`app/services/idp_service.py`)
+   ```python
+   from alibabacloud_docmind_api20220711.client import Client
+   from alibabacloud_tea_openapi import models as open_api_models
+   import os
+   import base64
+   import time
+
+   class IDPService:
+       def __init__(self):
+           config = open_api_models.Config(
+               access_key_id=os.environ.get('ALIBABA_ACCESS_KEY_ID'),
+               access_key_secret=os.environ.get('ALIBABA_ACCESS_KEY_SECRET'),
+               endpoint='docmind-api.cn-hangzhou.aliyuncs.com'
+           )
+           self.client = Client(config)
+
+       def parse_document(self, file_path):
+           """调用阿里云文档智能API解析文档"""
+           try:
+               with open(file_path, 'rb') as f:
+                   file_content = f.read()
+                   file_base64 = base64.b64encode(file_content).decode('utf-8')
+
+               from alibabacloud_docmind_api20220711 import models as docmind_models
+
+               request = docmind_models.SubmitDocumentExtractJobRequest(
+                   file_name=os.path.basename(file_path),
+                   file_content=file_base64
+               )
+
+               response = self.client.submit_document_extract_job(request)
+               job_id = response.body.data.id
+
+               # 轮询获取结果
+               while True:
+                   query_request = docmind_models.GetDocumentExtractJobRequest(id=job_id)
+                   query_response = self.client.get_document_extract_job(query_request)
+
+                   status = query_response.body.data.status
+                   if status == 'SUCCESS':
+                       return query_response.body.data.result
+                   elif status == 'FAILED':
+                       raise Exception(f"文档解析失败: {query_response.body.data.error_message}")
+
+                   time.sleep(2)
+
+           except Exception as e:
+               raise Exception(f"IDP服务调用失败: {str(e)}")
+   ```
+
+2. **实现语义切分器** (`app/services/semantic_splitter.py`)
+   ```python
+   class SemanticSplitter:
+       def __init__(self, max_chunk_size=1000, overlap=100):
+           self.max_chunk_size = max_chunk_size
+           self.overlap = overlap
+
+       def split_document(self, idp_result, document):
+           """基于IDP结果进行语义切分"""
+           chunks = []
+
+           # 解析IDP返回的结构化数据
+           # 基于文档层级树进行语义切分
+           # 保持表格、代码块等完整性
+
+           return chunks
+
+       def extract_metadata(self, chunk, document):
+           """提取文档片段的元数据"""
+           return {
+               'vendor': self._detect_vendor(chunk['content']),
+               'category': self._classify_content(chunk['content']),
+               'source_document': document.original_filename,
+               'page_number': chunk.get('page_number'),
+               'element_type': chunk.get('type', 'text')
+           }
+   ```
+
+**验收标准**:
+- IDP服务集成到后端异步任务系统
+- 语义切分算法实现完成
+- 能处理PDF、Word、图片等多种格式
+
+### 7.3 测试IDP集成 (第3天)
+
+**目标**: 测试文档解析和切分功能。
+
+**具体步骤**:
+
+1. **编写测试用例**
+   ```python
+   def test_idp_integration():
+       # 测试不同类型文档解析
+       # 测试语义切分效果
+       # 测试元数据提取
+       pass
+   ```
+
+2. **性能测试**
+   - 测试解析速度
+   - 测试并发处理能力
+   - 测试错误处理机制
+
+**验收标准**:
+- 所有测试用例通过
+- 解析准确率>90%
+- 平均解析时间<30秒/文档
+
+---
+
+## 🎯 任务8: 向量数据库构建与配置
+
+### 8.1 Weaviate本地部署 (第1天)
+
+**目标**: 使用Docker在本地部署Weaviate向量数据库。
+
+**负责人**: 模型团队主导，后端团队协助Docker配置
+
+**具体步骤**:
+
+1. **更新Docker Compose配置** (`docker-compose.local.yml`)
+   ```yaml
+   version: '3.8'
+   services:
+     weaviate:
+       image: semitechnologies/weaviate:1.21.2
+       ports:
+         - "8080:8080"
+         - "50051:50051"
+       environment:
+         QUERY_DEFAULTS_LIMIT: 25
+         AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+         PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+         DEFAULT_VECTORIZER_MODULE: 'none'
+         ENABLE_MODULES: 'text2vec-openai,generative-openai'
+         CLUSTER_HOSTNAME: 'node1'
+       volumes:
+         - weaviate_data:/var/lib/weaviate
+
+     mysql:
+       image: mysql:8.0
+       ports:
+         - "3306:3306"
+       environment:
+         MYSQL_ROOT_PASSWORD: password
+         MYSQL_DATABASE: ip_expert
+       volumes:
+         - mysql_data:/var/lib/mysql
+
+     redis:
+       image: redis:7-alpine
+       ports:
+         - "6379:6379"
+       volumes:
+         - redis_data:/data
+
+   volumes:
+     weaviate_data:
+     mysql_data:
+     redis_data:
+   ```
+
+2. **创建向量服务** (`app/services/vector_service.py`)
+   ```python
+   import weaviate
+   from app.services.embedding_service import QwenEmbedding
+
+   class VectorService:
+       def __init__(self):
+           self.client = weaviate.Client("http://localhost:8080")
+           self.embedding_service = QwenEmbedding()
+
+       def create_schema(self):
+           schema = {
+               "class": "KnowledgeChunk",
+               "description": "网络运维知识片段",
+               "properties": [
+                   {"name": "content", "dataType": ["text"]},
+                   {"name": "title", "dataType": ["string"]},
+                   {"name": "vendor", "dataType": ["string"]},
+                   {"name": "category", "dataType": ["string"]},
+                   {"name": "source_document", "dataType": ["string"]},
+                   {"name": "page_number", "dataType": ["int"]}
+               ],
+               "vectorizer": "none"
+           }
+           self.client.schema.create_class(schema)
+
+       def index_chunks(self, chunks, document_id):
+           """批量索引文档片段"""
+           with self.client.batch as batch:
+               for chunk in chunks:
+                   vector = self.embedding_service.embed_text(chunk['content'])
+
+                   batch.add_data_object(
+                       data_object=chunk,
+                       class_name="KnowledgeChunk",
+                       vector=vector
+                   )
+   ```
+
+**验收标准**:
+- Weaviate服务正常启动
+- Schema创建成功
+- 支持向量索引和查询
+
+### 8.2 向量化模型集成 (第2天)
+
+**目标**: 集成阿里云百炼平台的text-embedding-v4模型。
+
+**负责人**: 模型团队
+
+**具体步骤**:
+
+1. **创建嵌入服务** (`app/services/embedding_service.py`)
+   ```python
+   from dashscope import TextEmbedding
+   import os
+   import time
+   from typing import List
+
+   class QwenEmbedding:
+       def __init__(self, api_key=None):
+           self.api_key = api_key or os.environ.get('DASHSCOPE_API_KEY')
+           self.model = 'text-embedding-v4'
+
+       def embed_text(self, text: str) -> List[float]:
+           """单个文本向量化"""
+           try:
+               response = TextEmbedding.call(
+                   model=self.model,
+                   input=text,
+                   api_key=self.api_key
+               )
+               return response.output['embeddings'][0]['embedding']
+           except Exception as e:
+               raise Exception(f"向量化失败: {str(e)}")
+
+       def embed_batch(self, texts: List[str], batch_size=10) -> List[List[float]]:
+           """批量文本向量化"""
+           embeddings = []
+           for i in range(0, len(texts), batch_size):
+               batch = texts[i:i+batch_size]
+               try:
+                   response = TextEmbedding.call(
+                       model=self.model,
+                       input=batch,
+                       api_key=self.api_key
+                   )
+                   batch_embeddings = [emb['embedding'] for emb in response.output['embeddings']]
+                   embeddings.extend(batch_embeddings)
+                   time.sleep(0.1)  # 避免API限流
+               except Exception as e:
+                   # 单个处理失败的文本
+                   for text in batch:
+                       try:
+                           emb = self.embed_text(text)
+                           embeddings.append(emb)
+                       except:
+                           embeddings.append([0.0] * 1536)  # 默认维度
+           return embeddings
+   ```
+
+**验收标准**:
+- 能成功调用text-embedding-v4 API
+- 支持批量向量化处理
+- 向量维度正确(1536维)
+
+---
+
+## 🎯 任务9: 混合检索算法实现
+
+### 9.1 两阶段检索实现 (第1-2天)
+
+**目标**: 实现召回+精排的两阶段检索算法。
+
+**负责人**: 模型团队主导，后端团队配合API集成
+
+**具体步骤**:
+
+1. **创建检索服务** (`app/services/retrieval_service.py`)
+   ```python
+   import weaviate
+   from app.services.embedding_service import QwenEmbedding
+   from typing import List, Dict
+
+   class RetrievalService:
+       def __init__(self):
+           self.client = weaviate.Client("http://localhost:8080")
+           self.embedding_service = QwenEmbedding()
+
+       def hybrid_search(self, query: str, top_k: int = 5,
+                        vendor_filter: str = None) -> List[Dict]:
+           """混合检索：召回+精排"""
+
+           # 第一阶段：召回
+           candidates = self._recall_stage(query, vendor_filter)
+
+           # 第二阶段：精排
+           ranked_results = self._rerank_stage(query, candidates, top_k)
+
+           return ranked_results
+
+       def _recall_stage(self, query: str, vendor_filter: str = None) -> List[Dict]:
+           """召回阶段：BM25 + 向量检索"""
+
+           # BM25关键词检索
+           bm25_results = self._bm25_search(query, vendor_filter, limit=50)
+
+           # 向量语义检索
+           vector_results = self._vector_search(query, vendor_filter, limit=50)
+
+           # 合并去重
+           combined_results = self._merge_results(bm25_results, vector_results)
+
+           return combined_results
+
+       def _bm25_search(self, query: str, vendor_filter: str = None, limit: int = 50):
+           """BM25关键词检索"""
+           where_filter = None
+           if vendor_filter:
+               where_filter = {"path": ["vendor"], "operator": "Equal", "valueString": vendor_filter}
+
+           result = self.client.query.get("KnowledgeChunk", [
+               "content", "title", "vendor", "category", "source_document", "page_number"
+           ]).with_bm25(
+               query=query
+           ).with_where(where_filter).with_limit(limit).do()
+
+           return result.get('data', {}).get('Get', {}).get('KnowledgeChunk', [])
+
+       def _vector_search(self, query: str, vendor_filter: str = None, limit: int = 50):
+           """向量语义检索"""
+           query_vector = self.embedding_service.embed_text(query)
+
+           where_filter = None
+           if vendor_filter:
+               where_filter = {"path": ["vendor"], "operator": "Equal", "valueString": vendor_filter}
+
+           result = self.client.query.get("KnowledgeChunk", [
+               "content", "title", "vendor", "category", "source_document", "page_number"
+           ]).with_near_vector({
+               "vector": query_vector
+           }).with_where(where_filter).with_limit(limit).do()
+
+           return result.get('data', {}).get('Get', {}).get('KnowledgeChunk', [])
+
+       def _rerank_stage(self, query: str, candidates: List[Dict], top_k: int) -> List[Dict]:
+           """精排阶段：使用Qwen3-Reranker"""
+           if not candidates:
+               return []
+
+           # 调用重排序模型
+           scores = self._call_reranker(query, candidates)
+
+           # 按分数排序
+           scored_candidates = list(zip(candidates, scores))
+           scored_candidates.sort(key=lambda x: x[1], reverse=True)
+
+           # 返回top_k结果
+           return [candidate for candidate, score in scored_candidates[:top_k]]
+
+       def _call_reranker(self, query: str, candidates: List[Dict]) -> List[float]:
+           """调用OLLAMA部署的Qwen3-Reranker模型"""
+           # TODO: 实现OLLAMA API调用
+           # 暂时返回模拟分数
+           import random
+           return [random.random() for _ in candidates]
+   ```
+
+**验收标准**:
+- 混合检索功能正常
+- 召回率>80%
+- 检索速度<500ms
+
+### 9.2 重排序模型部署 (第3天)
+
+**目标**: 使用OLLAMA部署Qwen3-Reranker模型。
+
+**负责人**: 模型团队
+
+**具体步骤**:
+
+1. **安装OLLAMA**
+   ```bash
+   # macOS
+   brew install ollama
+
+   # Linux
+   curl -fsSL https://ollama.ai/install.sh | sh
+   ```
+
+2. **部署重排序模型**
+   ```bash
+   ollama pull qwen3-reranker
+   ollama serve
+   ```
+
+3. **集成重排序API** (`app/services/reranker_service.py`)
+   ```python
+   import requests
+   import json
+   from typing import List, Dict
+
+   class RerankerService:
+       def __init__(self, ollama_url="http://localhost:11434"):
+           self.ollama_url = ollama_url
+
+       def rerank(self, query: str, documents: List[str]) -> List[float]:
+           """使用Qwen3-Reranker对文档重排序"""
+           scores = []
+
+           for doc in documents:
+               prompt = f"Query: {query}\nDocument: {doc}\nRelevance score:"
+
+               response = requests.post(
+                   f"{self.ollama_url}/api/generate",
+                   json={
+                       "model": "qwen3-reranker",
+                       "prompt": prompt,
+                       "stream": False
+                   }
+               )
+
+               if response.status_code == 200:
+                   result = response.json()
+                   # 解析相关性分数
+                   score = self._parse_score(result.get('response', ''))
+                   scores.append(score)
+               else:
+                   scores.append(0.0)
+
+           return scores
+
+       def _parse_score(self, response: str) -> float:
+           """解析模型返回的相关性分数"""
+           try:
+               # 简单的分数解析逻辑
+               import re
+               match = re.search(r'(\d+\.?\d*)', response)
+               if match:
+                   return float(match.group(1))
+           except:
+               pass
+           return 0.5  # 默认分数
+   ```
+
+**验收标准**:
+- OLLAMA服务正常运行
+- 重排序模型部署成功
+- API调用正常
+
+---
+
+## 🎯 任务10: 提示词工程与优化
+
+### 10.1 基础Prompt设计 (第1-2天)
+
+**目标**: 设计用于不同场景的基础提示词模板。
+
+**负责人**: 模型团队主导
+
+**具体步骤**:
+
+1. **创建Prompt模板库** (`app/prompts/`)
+   ```python
+   # app/prompts/analysis_prompt.py
+   ANALYSIS_PROMPT = """
+   你是一位资深的网络运维专家。请分析用户提出的网络问题。
+
+   用户问题: {user_query}
+
+   上下文信息:
+   {context}
+
+   请按以下格式分析:
+   1. 问题分类: [OSPF/BGP/MPLS/VPN/其他]
+   2. 可能原因: 列出3-5个可能的原因
+   3. 需要补充的信息: 如果信息不足，列出需要用户提供的具体信息
+   4. 初步建议: 给出初步的排查方向
+
+   如果信息不足以给出完整分析，请在回答末尾添加: [NEED_MORE_INFO]
+   """
+
+   CLARIFICATION_PROMPT = """
+   基于当前的分析，我需要更多信息来帮助您解决问题。
+
+   当前分析: {current_analysis}
+
+   请回答以下问题:
+   {questions}
+
+   您也可以上传相关的配置文件、日志文件或网络拓扑图。
+   """
+
+   SOLUTION_PROMPT = """
+   你是一位{vendor}网络设备专家。基于以下信息，提供详细的解决方案。
+
+   问题描述: {problem}
+   相关文档: {retrieved_docs}
+   用户补充信息: {user_context}
+
+   请提供:
+   1. 问题根因分析
+   2. 详细解决步骤 (每步都要具体可执行)
+   3. 验证方法
+   4. 预防措施
+
+   在引用文档内容时，请使用 [doc1], [doc2] 等标记。
+   所有命令都要使用{vendor}的语法格式。
+   """
+   ```
+
+2. **厂商适配Prompt**
+   ```python
+   # app/prompts/vendor_prompts.py
+   HUAWEI_PROMPT = """
+   你是华为VRP系统专家。请使用华为设备的命令语法回答问题。
+
+   常用命令格式:
+   - 查看接口: display interface
+   - 查看路由: display ip routing-table
+   - 查看OSPF: display ospf peer
+   - 配置接口: interface GigabitEthernet0/0/1
+
+   {base_prompt}
+
+   注意: 所有命令必须符合VRP语法规范。
+   """
+
+   CISCO_PROMPT = """
+   你是思科IOS系统专家。请使用思科设备的命令语法回答问题。
+
+   常用命令格式:
+   - 查看接口: show interfaces
+   - 查看路由: show ip route
+   - 查看OSPF: show ip ospf neighbor
+   - 配置接口: interface GigabitEthernet0/0
+
+   {base_prompt}
+
+   注意: 所有命令必须符合IOS语法规范。
+   """
+   ```
+
+**验收标准**:
+- Prompt模板覆盖所有节点类型
+- 支持厂商适配
+- 输出格式规范统一
+
+### 10.2 LLM服务集成 (第3天)
+
+**目标**: 集成阿里云百炼平台的qwen-plus模型。
+
+**负责人**: 模型团队主导，后端团队配合
+
+**具体步骤**:
+
+1. **创建LLM服务** (`app/services/llm_service.py`)
+   ```python
+   from langchain_openai import ChatOpenAI
+   from langchain.schema import HumanMessage, SystemMessage
+   from app.prompts.analysis_prompt import ANALYSIS_PROMPT, SOLUTION_PROMPT
+   import os
+
+   class LLMService:
+       def __init__(self):
+           self.llm = ChatOpenAI(
+               model="qwen-plus",
+               openai_api_key=os.environ.get('DASHSCOPE_API_KEY'),
+               openai_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
+               temperature=0.1
+           )
+
+       def analyze_query(self, query: str, context: str = "") -> dict:
+           """分析用户查询"""
+           prompt = ANALYSIS_PROMPT.format(
+               user_query=query,
+               context=context
+           )
+
+           messages = [
+               SystemMessage(content="你是一位资深的网络运维专家。"),
+               HumanMessage(content=prompt)
+           ]
+
+           response = self.llm.invoke(messages)
+
+           # 解析响应
+           need_more_info = "[NEED_MORE_INFO]" in response.content
+
+           return {
+               "analysis": response.content,
+               "need_more_info": need_more_info,
+               "category": self._extract_category(response.content)
+           }
+
+       def generate_solution(self, query: str, context: list,
+                           vendor: str = "通用") -> dict:
+           """生成解决方案"""
+           retrieved_docs = self._format_context(context)
+
+           prompt = SOLUTION_PROMPT.format(
+               vendor=vendor,
+               problem=query,
+               retrieved_docs=retrieved_docs,
+               user_context=""
+           )
+
+           messages = [
+               SystemMessage(content=f"你是一位{vendor}网络设备专家。"),
+               HumanMessage(content=prompt)
+           ]
+
+           response = self.llm.invoke(messages)
+
+           return {
+               "answer": response.content,
+               "sources": self._extract_sources(context),
+               "commands": self._extract_commands(response.content)
+           }
+
+       def _extract_category(self, text: str) -> str:
+           """从分析结果中提取问题分类"""
+           # 简单的关键词匹配
+           if "OSPF" in text:
+               return "OSPF"
+           elif "BGP" in text:
+               return "BGP"
+           elif "MPLS" in text:
+               return "MPLS"
+           else:
+               return "其他"
+
+       def _format_context(self, context: list) -> str:
+           """格式化检索到的上下文"""
+           formatted = ""
+           for i, doc in enumerate(context, 1):
+               formatted += f"[doc{i}] {doc.get('title', '')}\n{doc.get('content', '')}\n\n"
+           return formatted
+
+       def _extract_sources(self, context: list) -> list:
+           """提取引用来源"""
+           sources = []
+           for i, doc in enumerate(context, 1):
+               sources.append({
+                   "id": f"doc{i}",
+                   "file": doc.get('source_document', ''),
+                   "page": doc.get('page_number', 0)
+               })
+           return sources
+
+       def _extract_commands(self, text: str) -> list:
+           """从回答中提取命令"""
+           import re
+           # 简单的命令提取逻辑
+           commands = re.findall(r'`([^`]+)`', text)
+           return commands
+   ```
+
+**验收标准**:
+- LLM服务集成成功
+- 支持流式和非流式输出
+- 错误处理完善
+
+---
+
+## 🎯 任务11: langgraph Agent流程构建
+
+### 11.1 状态机设计 (第1-2天)
+
+**目标**: 设计多轮对话的状态机架构。
+
+**负责人**: 模型团队主导，后端团队配合集成
+
+**具体步骤**:
+
+1. **定义Agent状态** (`app/services/agent_state.py`)
+   ```python
+   from typing import TypedDict, List, Dict, Optional
+
+   class AgentState(TypedDict):
+       messages: List[Dict]      # 对话历史
+       context: List[Dict]       # 检索到的知识
+       user_query: str          # 用户问题
+       vendor: Optional[str]    # 设备厂商
+       category: Optional[str]  # 问题分类
+       need_more_info: bool     # 是否需要更多信息
+       solution_ready: bool     # 是否可以给出解决方案
+       case_id: str            # 案例ID
+       current_node_id: str    # 当前节点ID
+   ```
+
+2. **实现Agent节点** (`app/services/agent_nodes.py`)
+   ```python
+   from app.services.llm_service import LLMService
+   from app.services.retrieval_service import RetrievalService
+   from app.models.case import Node
+   from app import db
+
+   def analyze_query(state: AgentState) -> AgentState:
+       """分析用户问题"""
+       llm_service = LLMService()
+
+       analysis_result = llm_service.analyze_query(
+           state["user_query"],
+           context=""
+       )
+
+       # 更新状态
+       state["category"] = analysis_result.get("category")
+       state["need_more_info"] = analysis_result.get("need_more_info", False)
+
+       # 更新数据库节点
+       node = Node.query.get(state["current_node_id"])
+       if node:
+           node.content = {
+               "analysis": analysis_result.get("analysis"),
+               "category": analysis_result.get("category")
+           }
+           if state["need_more_info"]:
+               node.type = "AI_CLARIFICATION"
+               node.status = "AWAITING_USER_INPUT"
+           else:
+               node.type = "AI_ANALYSIS"
+               node.status = "COMPLETED"
+           db.session.commit()
+
+       return state
+
+   def retrieve_knowledge(state: AgentState) -> AgentState:
+       """检索相关知识"""
+       retrieval_service = RetrievalService()
+
+       context = retrieval_service.hybrid_search(
+           query=state["user_query"],
+           vendor_filter=state.get("vendor")
+       )
+
+       state["context"] = context
+       return state
+
+   def generate_solution(state: AgentState) -> AgentState:
+       """生成解决方案"""
+       llm_service = LLMService()
+
+       solution = llm_service.generate_solution(
+           query=state["user_query"],
+           context=state["context"],
+           vendor=state.get("vendor", "通用")
+       )
+
+       # 更新数据库节点
+       node = Node.query.get(state["current_node_id"])
+       if node:
+           node.type = "SOLUTION"
+           node.title = "解决方案"
+           node.status = "COMPLETED"
+           node.content = {
+               "answer": solution.get("answer"),
+               "sources": solution.get("sources"),
+               "commands": solution.get("commands")
+           }
+           db.session.commit()
+
+       state["solution_ready"] = True
+       return state
+   ```
+
+**验收标准**:
+- 状态结构设计合理
+- 节点功能实现完整
+- 与数据库集成正常
+
+### 11.2 工作流编排 (第3-4天)
+
+**目标**: 使用langgraph构建完整的对话流程。
+
+**负责人**: 模型团队主导
+
+**具体步骤**:
+
+1. **创建Agent工作流** (`app/services/agent_workflow.py`)
+   ```python
+   from langgraph.graph import StateGraph, END
+   from app.services.agent_state import AgentState
+   from app.services.agent_nodes import analyze_query, retrieve_knowledge, generate_solution
+
+   def create_agent_workflow():
+       """创建Agent工作流"""
+       workflow = StateGraph(AgentState)
+
+       # 添加节点
+       workflow.add_node("analyze", analyze_query)
+       workflow.add_node("retrieve", retrieve_knowledge)
+       workflow.add_node("solve", generate_solution)
+
+       # 设置入口点
+       workflow.set_entry_point("analyze")
+
+       # 定义条件边
+       workflow.add_conditional_edges(
+           "analyze",
+           should_retrieve_or_end,
+           {
+               "retrieve": "retrieve",
+               "end": END
+           }
+       )
+
+       workflow.add_edge("retrieve", "solve")
+       workflow.add_edge("solve", END)
+
+       return workflow.compile()
+
+   def should_retrieve_or_end(state: AgentState) -> str:
+       """判断是否需要检索知识"""
+       if state.get("need_more_info"):
+           return "end"  # 需要更多信息，等待用户输入
+       return "retrieve"
+   ```
+
+2. **集成到异步任务** (更新 `app/services/agent_service.py`)
+   ```python
+   from app.services.agent_workflow import create_agent_workflow
+
+   def analyze_user_query(case_id, node_id, query):
+       """分析用户查询的异步任务"""
+       app = create_app()
+       with app.app_context():
+           try:
+               # 创建Agent工作流
+               agent = create_agent_workflow()
+
+               # 初始化状态
+               initial_state = {
+                   "user_query": query,
+                   "messages": [],
+                   "context": [],
+                   "need_more_info": False,
+                   "solution_ready": False,
+                   "case_id": case_id,
+                   "current_node_id": node_id
+               }
+
+               # 执行工作流
+               final_state = agent.invoke(initial_state)
+
+           except Exception as e:
+               # 错误处理
+               node = Node.query.get(node_id)
+               if node:
+                   node.status = "COMPLETED"
+                   node.content = {"error": "处理过程中发生错误，请重试"}
+                   db.session.commit()
+               raise
+   ```
+
+**验收标准**:
+- 工作流逻辑正确
+- 与后端异步任务集成
+- 支持多轮对话
+
+---
+
+## 🎯 任务12: 模型接口集成与测试
+
+### 12.1 性能优化 (第1天)
+
+**目标**: 优化模型调用性能，添加监控。
+
+**负责人**: 模型团队
+
+**具体步骤**:
+
+1. **添加缓存机制**
+   ```python
+   # app/services/cache_service.py
+   import redis
+   import hashlib
+   import json
+
+   class CacheService:
+       def __init__(self):
+           self.redis_client = redis.from_url(os.environ.get('REDIS_URL'))
+
+       def get_cached_result(self, key: str):
+           """获取缓存结果"""
+           cached = self.redis_client.get(key)
+           if cached:
+               return json.loads(cached)
+           return None
+
+       def cache_result(self, key: str, result: dict, expire_time: int = 3600):
+           """缓存结果"""
+           self.redis_client.setex(key, expire_time, json.dumps(result))
+
+       def generate_cache_key(self, prefix: str, *args) -> str:
+           """生成缓存键"""
+           content = f"{prefix}:{':'.join(map(str, args))}"
+           return hashlib.md5(content.encode()).hexdigest()
+   ```
+
+2. **添加性能监控**
+   ```python
+   # app/utils/monitoring.py
+   import time
+   import logging
+   from functools import wraps
+
+   def monitor_performance(operation_name: str):
+       def decorator(func):
+           @wraps(func)
+           def wrapper(*args, **kwargs):
+               start_time = time.time()
+               try:
+                   result = func(*args, **kwargs)
+                   duration = time.time() - start_time
+                   logging.info(f"{operation_name} success: {duration:.2f}s")
+                   return result
+               except Exception as e:
+                   duration = time.time() - start_time
+                   logging.error(f"{operation_name} failed: {duration:.2f}s, {e}")
+                   raise
+           return wrapper
+       return decorator
+   ```
+
+**验收标准**:
+- 缓存机制工作正常
+- 性能监控数据准确
+- 平均响应时间<3秒
+
+### 12.2 集成测试 (第2天)
+
+**目标**: 测试所有AI组件的集成效果。
+
+**负责人**: 全团队
+
+**具体步骤**:
+
+1. **端到端测试**
+   ```python
+   def test_full_ai_pipeline():
+       """测试完整的AI流程"""
+       # 测试文档上传和解析
+       # 测试向量化和索引
+       # 测试检索和重排序
+       # 测试Agent对话流程
+       pass
+   ```
+
+**验收标准**:
+- 所有AI组件集成测试通过
+- 端到端流程正常
+- 性能指标达标
+
+---
+
+## 🎯 任务13: 系统集成与端到端测试
+
+### 13.1 API集成测试 (第1-2天)
 
 **目标**: 进行完整的API集成测试。
+
+**负责人**: 全团队协作
 
 **具体步骤**:
 
@@ -1538,9 +2560,56 @@
 - 集成测试覆盖主要流程
 - 性能测试满足要求
 
-### 7.2 错误处理和日志 (第2天)
+### 13.2 AI流程集成测试 (第2天)
+
+**目标**: 测试完整的AI处理流程。
+
+**负责人**: 模型团队主导，后端团队配合
+
+**具体步骤**:
+
+1. **文档处理流程测试**
+   ```python
+   def test_document_processing_pipeline():
+       """测试文档处理完整流程"""
+       # 上传文档 -> IDP解析 -> 语义切分 -> 向量化 -> 索引
+       # 验证每个步骤的输出
+       pass
+
+   def test_knowledge_retrieval():
+       """测试知识检索流程"""
+       # 用户查询 -> 混合检索 -> 重排序 -> 返回结果
+       # 验证检索质量和性能
+       pass
+
+   def test_agent_conversation():
+       """测试Agent对话流程"""
+       # 用户问题 -> 分析 -> 检索 -> 生成方案
+       # 验证多轮对话逻辑
+       pass
+   ```
+
+2. **性能基准测试**
+   ```python
+   def test_performance_benchmarks():
+       """性能基准测试"""
+       # 文档解析速度: <30秒/文档
+       # 检索响应时间: <500ms
+       # LLM生成时间: <3秒
+       # 并发处理能力: 10个并发请求
+       pass
+   ```
+
+**验收标准**:
+- 所有AI流程测试通过
+- 性能指标达到要求
+- 错误处理机制完善
+
+### 13.3 错误处理和日志 (第3天)
 
 **目标**: 完善错误处理和日志系统。
+
+**负责人**: 后端团队主导
 
 **具体步骤**:
 
@@ -1616,9 +2685,11 @@
 - 日志记录详细准确
 - 错误响应格式统一
 
-### 7.3 部署准备 (第3天)
+### 13.4 部署准备 (第4天)
 
 **目标**: 准备生产环境部署配置。
+
+**负责人**: 后端团队主导，模型团队配合
 
 **具体步骤**:
 
@@ -1668,12 +2739,117 @@
 
 ---
 
+## 🎯 任务14: (进阶)小模型微调
+
+### 14.1 数据准备 (第1-2天)
+
+**目标**: 准备用于微调的训练数据集。
+
+**负责人**: 模型团队
+
+**具体步骤**:
+
+1. **收集问题分类数据**
+   ```python
+   # 构建问题分类数据集
+   classification_data = [
+       {"text": "OSPF邻居建立失败", "label": "OSPF"},
+       {"text": "BGP路由不通", "label": "BGP"},
+       {"text": "MPLS VPN配置问题", "label": "MPLS"},
+       # ... 更多数据
+   ]
+   ```
+
+2. **数据清洗和标注**
+   - 去重和格式统一
+   - 人工标注和校验
+   - 数据集划分(训练/验证/测试)
+
+**验收标准**:
+- 收集到1000+标注样本
+- 数据质量高，标注准确
+- 数据集划分合理
+
+### 14.2 模型微调 (第3-5天)
+
+**目标**: 微调BERT模型用于问题意图分类。
+
+**负责人**: 模型团队
+
+**具体步骤**:
+
+1. **选择基础模型**
+   ```python
+   from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+   model_name = "bert-base-chinese"
+   tokenizer = AutoTokenizer.from_pretrained(model_name)
+   model = AutoModelForSequenceClassification.from_pretrained(
+       model_name,
+       num_labels=len(categories)
+   )
+   ```
+
+2. **训练脚本**
+   ```python
+   from transformers import Trainer, TrainingArguments
+
+   training_args = TrainingArguments(
+       output_dir="./results",
+       num_train_epochs=3,
+       per_device_train_batch_size=16,
+       per_device_eval_batch_size=64,
+       warmup_steps=500,
+       weight_decay=0.01,
+       logging_dir="./logs",
+   )
+
+   trainer = Trainer(
+       model=model,
+       args=training_args,
+       train_dataset=train_dataset,
+       eval_dataset=eval_dataset,
+   )
+
+   trainer.train()
+   ```
+
+**验收标准**:
+- 模型训练完成
+- 验证集准确率>85%
+- 模型可以正常推理
+
+---
+
 ## 📊 进度跟踪与质量控制
 
 ### 每日站会
 - **时间**: 每天上午9:00
 - **内容**: 汇报昨日完成情况、今日计划、遇到的问题
-- **参与人**: 后端团队3人 + 项目负责人
+- **参与人**: 后端+模型团队5人 + 项目负责人
+
+### 团队协作分工
+#### 后端团队 (3人) 主要负责:
+- Flask项目架构和API开发
+- 数据库设计和模型定义
+- 异步任务系统和队列管理
+- 用户认证和权限管理
+- 数据看板和统计API
+- 系统部署和运维
+
+#### 模型团队 (2人) 主要负责:
+- 数据收集和IDP集成
+- 向量数据库构建和配置
+- 混合检索算法实现
+- 提示词工程和优化
+- langgraph Agent流程构建
+- 模型接口集成和性能优化
+
+#### 共同协作区域:
+- `app/services/` 目录下的AI服务模块
+- 异步任务的AI处理逻辑
+- API接口的AI功能集成
+- 系统集成测试和调试
 
 ### 代码审查
 - **频率**: 每个功能模块完成后
@@ -1681,11 +2857,12 @@
 - **工具**: Git Pull Request + Code Review
 
 ### 质量检查点
-1. **第一周末**: 基础架构和认证系统验收
-2. **第二周末**: 核心API功能验收
-3. **第三周末**: 完整系统集成测试
+1. **第一周末**: 基础架构、认证系统、数据收集和IDP集成验收
+2. **第二周末**: 核心API功能、向量数据库、混合检索算法验收
+3. **第三周末**: Agent流程、模型集成、完整系统集成测试验收
 
 ### 交付物清单
+#### 后端交付物:
 - [ ] Flask后端应用代码
 - [ ] 数据库设计文档和迁移脚本
 - [ ] API文档和测试用例
@@ -1693,10 +2870,26 @@
 - [ ] Docker部署配置
 - [ ] 系统监控和日志配置
 
+#### AI模型交付物:
+- [ ] 处理后的知识库数据集
+- [ ] Weaviate向量数据库(包含索引数据)
+- [ ] 混合检索算法代码
+- [ ] langgraph Agent工作流
+- [ ] 提示词模板库
+- [ ] 模型接口封装代码
+- [ ] AI服务集成文档
+
 ### 风险预案
+#### 后端风险:
 1. **数据库性能问题**: 准备查询优化和索引方案
 2. **异步任务堆积**: 实现任务优先级和限流机制
 3. **API响应超时**: 添加缓存和异步处理
+
+#### AI模型风险:
+1. **IDP服务调用失败**: 准备本地OCR备选方案
+2. **向量化API限流**: 实现请求队列和重试机制
+3. **模型效果不佳**: 准备多个Prompt版本进行A/B测试
+4. **OLLAMA部署问题**: 准备云端重排序API备选方案
 
 ---
 
@@ -1707,12 +2900,15 @@
 - MySQL 8.0+
 - Redis 7+
 - Docker & Docker Compose
+- OLLAMA (用于本地模型部署)
 
 ### 开发工具
 - PyCharm 或 VS Code
 - Postman (API测试)
 - MySQL Workbench
 - Redis Desktop Manager
+- Jupyter Notebook (模型实验)
+- Docker Desktop
 
 ### 环境变量
 ```bash
@@ -1737,15 +2933,30 @@ export ALIBABA_ACCESS_KEY_SECRET=your-access-key-secret
 ## 📚 参考资料
 
 ### 技术文档
+#### 后端技术:
 - [Flask官方文档](https://flask.palletsprojects.com/)
 - [SQLAlchemy文档](https://docs.sqlalchemy.org/)
 - [RQ任务队列文档](https://python-rq.org/)
 - [JWT认证最佳实践](https://auth0.com/blog/a-look-at-the-latest-draft-for-jwt-bcp/)
+
+#### AI技术:
+- [阿里云文档智能API文档](https://help.aliyun.com/document_detail/442515.html)
+- [Weaviate官方文档](https://weaviate.io/developers/weaviate)
+- [LangGraph教程](https://langchain-ai.github.io/langgraph/)
+- [百炼大模型API文档](https://help.aliyun.com/zh/dashscope/)
+- [OLLAMA文档](https://ollama.ai/)
 
 ### 开发规范
 - [PEP 8 Python代码规范](https://pep8.org/)
 - [RESTful API设计指南](https://restfulapi.net/)
 - [数据库设计最佳实践](https://www.vertabelo.com/blog/database-design-best-practices/)
 
-记住：保持代码质量，注重安全性，及时沟通问题！🚀
+### 学习资源
+- RAG技术原理与实践
+- 向量数据库使用指南
+- 提示词工程最佳实践
+- 多轮对话系统设计
+- LangChain开发指南
+
+记住：保持代码质量，注重安全性，加强团队协作，及时沟通问题！🚀
 
