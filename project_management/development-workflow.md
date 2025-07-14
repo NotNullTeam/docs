@@ -36,8 +36,10 @@
 ##### 步骤一：开通大模型与文档智能服务
 1.  **百炼大模型服务 (LLM)**:
     - 访问[百炼大模型平台控制台](https://bailian.console.aliyun.com/)。
-    - 在 **API Key 管理** 页面创建并保管好您的 `API Key`。后端将使用此 Key 调用 `qwen-plus` 等模型。
-2.  **文档智能 (Document Mind)**:
+    - 在 **API Key 管理** 页面创建并保管好您的 `API Key`。后端将通过Langchain OpenAI兼容接口调用 `qwen-plus` 模型。
+2.  **百炼向量模型服务**:
+    - 使用同一个API Key通过Langchain DashScope集成调用 `text-embedding-v4` 向量模型。
+3.  **文档智能 (Document Mind)**:
     - 访问阿里云控制台，开通“文档智能”服务。
     - 通常新用户会有免费额度。您需要获取调用该服务所需的 AccessKey 信息。
 

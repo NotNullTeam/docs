@@ -70,14 +70,16 @@
    python-dotenv==1.0.0
    requests==2.31.0
 
-   # AI服务相关依赖
+   # AI服务相关依赖 - 统一使用Langchain集成
    langchain>=0.2.0
+   langchain-community>=0.2.0
    langchain_openai>=0.1.0
    dashscope>=1.14.1
 
    # 阿里云文档智能服务
-   alibabacloud_tea_openapi==0.3.7
-   alibabacloud_docmind_api20220711==2.0.1
+   alibabacloud_tea_openapi
+   alibabacloud_docmind_api20220711==1.4.7
+   alibabacloud_credentials
 
    # 向量数据库
    weaviate-client==3.25.3
@@ -159,14 +161,17 @@
    DATABASE_URL=mysql+pymysql://root:password@localhost/ip_expert
    REDIS_URL=redis://localhost:6379
 
-   # AI服务相关
+   # AI服务相关 - Langchain统一集成配置
    DASHSCOPE_API_KEY=your-dashscope-api-key
-   OPENAI_API_KEY=your-dashscope-api-key  # 用于langchain_openai
+   OPENAI_API_KEY=your-dashscope-api-key  # 用于langchain_openai兼容接口
    OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 
    # 阿里云文档智能服务
    ALIBABA_ACCESS_KEY_ID=your-access-key-id
    ALIBABA_ACCESS_KEY_SECRET=your-access-key-secret
+
+   # OLLAMA本地重排序模型服务
+   OLLAMA_BASE_URL=http://localhost:11434
    ```
 
 **验收标准**:
@@ -1124,55 +1129,89 @@
 
 2. **IDP服务封装** (`app/services/idp_service.py`)
    ```python
-   from alibabacloud_docmind_api20220711.client import Client
+   from alibabacloud_docmind_api20220711.client import Client as docmind_api20220711Client
    from alibabacloud_tea_openapi import models as open_api_models
+   from alibabacloud_docmind_api20220711 import models as docmind_api20220711_models
+   from alibabacloud_tea_util import models as util_models
+   from alibabacloud_credentials.client import Client as CredClient
    import os
-   import base64
+   import time
 
    class IDPService:
        def __init__(self):
+           # 使用默认凭证初始化Credentials Client
+           cred = CredClient()
            config = open_api_models.Config(
-               access_key_id=os.environ.get('ALIBABA_ACCESS_KEY_ID'),
-               access_key_secret=os.environ.get('ALIBABA_ACCESS_KEY_SECRET'),
-               endpoint='docmind-api.cn-hangzhou.aliyuncs.com'
+               access_key_id=cred.get_credential().access_key_id,
+               access_key_secret=cred.get_credential().access_key_secret
            )
-           self.client = Client(config)
+           config.endpoint = 'docmind-api.cn-hangzhou.aliyuncs.com'
+           self.client = docmind_api20220711Client(config)
 
        def parse_document(self, file_path):
-           """
-           调用阿里云文档智能API解析文档
-           """
+           """调用阿里云文档智能API解析文档"""
            try:
-               # 读取文件并转换为base64
-               with open(file_path, 'rb') as f:
-                   file_content = f.read()
-                   file_base64 = base64.b64encode(file_content).decode('utf-8')
-
-               # 构建请求参数
-               from alibabacloud_docmind_api20220711 import models as docmind_models
-
-               request = docmind_models.SubmitDocumentExtractJobRequest(
+               # 步骤1: 提交文档解析任务
+               request = docmind_api20220711_models.SubmitDocStructureJobAdvanceRequest(
+                   file_url_object=open(file_path, "rb"),
                    file_name=os.path.basename(file_path),
-                   file_content=file_base64
+                   structure_type='default',  # 返回完整结构化信息
+                   formula_enhancement=True   # 开启公式识别增强
                )
+               runtime = util_models.RuntimeOptions()
 
-               # 提交解析任务
-               response = self.client.submit_document_extract_job(request)
+               response = self.client.submit_doc_structure_job_advance(request, runtime)
                job_id = response.body.data.id
 
-               # 轮询获取结果
-               import time
+               # 步骤2: 轮询获取结果
                while True:
-                   query_request = docmind_models.GetDocumentExtractJobRequest(id=job_id)
-                   query_response = self.client.get_document_extract_job(query_request)
+                   query_request = docmind_api20220711_models.GetDocStructureResultRequest(
+                       id=job_id,
+                       reveal_markdown=True  # 输出Markdown格式
+                   )
 
-                   status = query_response.body.data.status
-                   if status == 'SUCCESS':
-                       return query_response.body.data.result
-                   elif status == 'FAILED':
-                       raise Exception(f"文档解析失败: {query_response.body.data.error_message}")
+                   query_response = self.client.get_doc_structure_result(query_request)
 
-                   time.sleep(2)  # 等待2秒后重试
+                   if query_response.body.completed:
+                       if query_response.body.status == 'Success':
+                           return query_response.body.data
+                       else:
+                           raise Exception(f"文档解析失败: {query_response.body.message}")
+
+                   time.sleep(10)  # 建议每10秒轮询一次
+
+           except Exception as e:
+               raise Exception(f"IDP服务调用失败: {str(e)}")
+
+       def parse_document_from_url(self, file_url, file_name):
+           """通过URL解析文档"""
+           try:
+               request = docmind_api20220711_models.SubmitDocStructureJobRequest(
+                   file_url=file_url,
+                   file_name=file_name,
+                   structure_type='default',
+                   formula_enhancement=True
+               )
+
+               response = self.client.submit_doc_structure_job(request)
+               job_id = response.body.data.id
+
+               # 轮询获取结果 (同上逻辑)
+               while True:
+                   query_request = docmind_api20220711_models.GetDocStructureResultRequest(
+                       id=job_id,
+                       reveal_markdown=True
+                   )
+
+                   query_response = self.client.get_doc_structure_result(query_request)
+
+                   if query_response.body.completed:
+                       if query_response.body.status == 'Success':
+                           return query_response.body.data
+                       else:
+                           raise Exception(f"文档解析失败: {query_response.body.message}")
+
+                   time.sleep(10)
 
            except Exception as e:
                raise Exception(f"IDP服务调用失败: {str(e)}")
@@ -1525,50 +1564,56 @@
 
 1. **完善IDP服务封装** (`app/services/idp_service.py`)
    ```python
-   from alibabacloud_docmind_api20220711.client import Client
+   from alibabacloud_docmind_api20220711.client import Client as docmind_api20220711Client
    from alibabacloud_tea_openapi import models as open_api_models
+   from alibabacloud_docmind_api20220711 import models as docmind_api20220711_models
+   from alibabacloud_tea_util import models as util_models
+   from alibabacloud_credentials.client import Client as CredClient
    import os
-   import base64
    import time
 
    class IDPService:
        def __init__(self):
+           # 使用默认凭证初始化Credentials Client
+           cred = CredClient()
            config = open_api_models.Config(
-               access_key_id=os.environ.get('ALIBABA_ACCESS_KEY_ID'),
-               access_key_secret=os.environ.get('ALIBABA_ACCESS_KEY_SECRET'),
-               endpoint='docmind-api.cn-hangzhou.aliyuncs.com'
+               access_key_id=cred.get_credential().access_key_id,
+               access_key_secret=cred.get_credential().access_key_secret
            )
-           self.client = Client(config)
+           config.endpoint = 'docmind-api.cn-hangzhou.aliyuncs.com'
+           self.client = docmind_api20220711Client(config)
 
        def parse_document(self, file_path):
            """调用阿里云文档智能API解析文档"""
            try:
-               with open(file_path, 'rb') as f:
-                   file_content = f.read()
-                   file_base64 = base64.b64encode(file_content).decode('utf-8')
-
-               from alibabacloud_docmind_api20220711 import models as docmind_models
-
-               request = docmind_models.SubmitDocumentExtractJobRequest(
+               # 步骤1: 提交文档解析任务
+               request = docmind_api20220711_models.SubmitDocStructureJobAdvanceRequest(
+                   file_url_object=open(file_path, "rb"),
                    file_name=os.path.basename(file_path),
-                   file_content=file_base64
+                   structure_type='default',  # 返回完整结构化信息
+                   formula_enhancement=True   # 开启公式识别增强
                )
+               runtime = util_models.RuntimeOptions()
 
-               response = self.client.submit_document_extract_job(request)
+               response = self.client.submit_doc_structure_job_advance(request, runtime)
                job_id = response.body.data.id
 
-               # 轮询获取结果
+               # 步骤2: 轮询获取结果
                while True:
-                   query_request = docmind_models.GetDocumentExtractJobRequest(id=job_id)
-                   query_response = self.client.get_document_extract_job(query_request)
+                   query_request = docmind_api20220711_models.GetDocStructureResultRequest(
+                       id=job_id,
+                       reveal_markdown=True  # 输出Markdown格式
+                   )
 
-                   status = query_response.body.data.status
-                   if status == 'SUCCESS':
-                       return query_response.body.data.result
-                   elif status == 'FAILED':
-                       raise Exception(f"文档解析失败: {query_response.body.data.error_message}")
+                   query_response = self.client.get_doc_structure_result(query_request)
 
-                   time.sleep(2)
+                   if query_response.body.completed:
+                       if query_response.body.status == 'Success':
+                           return query_response.body.data
+                       else:
+                           raise Exception(f"文档解析失败: {query_response.body.message}")
+
+                   time.sleep(10)  # 建议每10秒轮询一次
 
            except Exception as e:
                raise Exception(f"IDP服务调用失败: {str(e)}")
@@ -1585,11 +1630,49 @@
            """基于IDP结果进行语义切分"""
            chunks = []
 
-           # 解析IDP返回的结构化数据
-           # 基于文档层级树进行语义切分
-           # 保持表格、代码块等完整性
+           # 解析新的IDP返回结构
+           layouts = idp_result.get('layouts', [])
+           doc_tree = idp_result.get('logics', {}).get('docTree', [])
+
+           # 按照文档层级树进行语义切分
+           for layout in layouts:
+               chunk = {
+                   'content': layout.get('text', ''),
+                   'title': self._extract_title(layout),
+                   'type': layout.get('type', 'text'),
+                   'subtype': layout.get('subType', ''),
+                   'page_number': layout.get('pageNum', [0])[0] if layout.get('pageNum') else 0,
+                   'unique_id': layout.get('uniqueId', ''),
+                   'markdown_content': layout.get('markdownContent', '')  # 新增Markdown内容
+               }
+
+               # 根据内容长度决定是否需要进一步切分
+               if len(chunk['content']) > self.max_chunk_size:
+                   sub_chunks = self._split_large_content(chunk)
+                   chunks.extend(sub_chunks)
+               else:
+                   chunks.append(chunk)
 
            return chunks
+
+       def _extract_title(self, layout):
+           """从layout中提取标题"""
+           if layout.get('type') in ['title', 'para_title']:
+               return layout.get('text', '')
+           return ''
+
+       def _split_large_content(self, chunk):
+           """切分过长的内容"""
+           content = chunk['content']
+           sub_chunks = []
+
+           for i in range(0, len(content), self.max_chunk_size - self.overlap):
+               sub_content = content[i:i + self.max_chunk_size]
+               sub_chunk = chunk.copy()
+               sub_chunk['content'] = sub_content
+               sub_chunks.append(sub_chunk)
+
+           return sub_chunks
 
        def extract_metadata(self, chunk, document):
            """提取文档片段的元数据"""
@@ -1597,9 +1680,36 @@
                'vendor': self._detect_vendor(chunk['content']),
                'category': self._classify_content(chunk['content']),
                'source_document': document.original_filename,
-               'page_number': chunk.get('page_number'),
-               'element_type': chunk.get('type', 'text')
+               'page_number': chunk.get('page_number', 0),
+               'element_type': chunk.get('type', 'text'),
+               'element_subtype': chunk.get('subtype', ''),
+               'unique_id': chunk.get('unique_id', ''),
+               'has_markdown': bool(chunk.get('markdown_content'))
            }
+
+       def _detect_vendor(self, content):
+           """检测厂商信息"""
+           content_lower = content.lower()
+           if any(keyword in content_lower for keyword in ['华为', 'huawei', 'vrp']):
+               return '华为'
+           elif any(keyword in content_lower for keyword in ['思科', 'cisco', 'ios']):
+               return '思科'
+           elif any(keyword in content_lower for keyword in ['华三', 'h3c', 'comware']):
+               return '华三'
+           return '通用'
+
+       def _classify_content(self, content):
+           """分类内容"""
+           content_lower = content.lower()
+           if any(keyword in content_lower for keyword in ['ospf', 'open shortest path first']):
+               return 'OSPF'
+           elif any(keyword in content_lower for keyword in ['bgp', 'border gateway protocol']):
+               return 'BGP'
+           elif any(keyword in content_lower for keyword in ['mpls', 'multiprotocol label switching']):
+               return 'MPLS'
+           elif any(keyword in content_lower for keyword in ['vpn', 'virtual private network']):
+               return 'VPN'
+           return '其他'
    ```
 
 **验收标准**:
@@ -1689,12 +1799,15 @@
 2. **创建向量服务** (`app/services/vector_service.py`)
    ```python
    import weaviate
-   from app.services.embedding_service import QwenEmbedding
+   from langchain_community.embeddings import DashScopeEmbeddings
 
    class VectorService:
        def __init__(self):
            self.client = weaviate.Client("http://localhost:8080")
-           self.embedding_service = QwenEmbedding()
+           # 使用Langchain集成的DashScope向量模型
+           self.embedding_service = DashScopeEmbeddings(
+               model="text-embedding-v4"
+           )
 
        def create_schema(self):
            schema = {
@@ -1740,51 +1853,40 @@
 
 1. **创建嵌入服务** (`app/services/embedding_service.py`)
    ```python
-   from dashscope import TextEmbedding
-   import os
-   import time
+   from langchain_community.embeddings import DashScopeEmbeddings
    from typing import List
+   import os
 
    class QwenEmbedding:
        def __init__(self, api_key=None):
+           """使用Langchain集成的DashScope向量模型"""
            self.api_key = api_key or os.environ.get('DASHSCOPE_API_KEY')
-           self.model = 'text-embedding-v4'
+           self.embeddings = DashScopeEmbeddings(
+               model="text-embedding-v4",
+               dashscope_api_key=self.api_key
+           )
 
        def embed_text(self, text: str) -> List[float]:
            """单个文本向量化"""
            try:
-               response = TextEmbedding.call(
-                   model=self.model,
-                   input=text,
-                   api_key=self.api_key
-               )
-               return response.output['embeddings'][0]['embedding']
+               return self.embeddings.embed_query(text)
            except Exception as e:
                raise Exception(f"向量化失败: {str(e)}")
 
-       def embed_batch(self, texts: List[str], batch_size=10) -> List[List[float]]:
+       def embed_batch(self, texts: List[str]) -> List[List[float]]:
            """批量文本向量化"""
-           embeddings = []
-           for i in range(0, len(texts), batch_size):
-               batch = texts[i:i+batch_size]
-               try:
-                   response = TextEmbedding.call(
-                       model=self.model,
-                       input=batch,
-                       api_key=self.api_key
-                   )
-                   batch_embeddings = [emb['embedding'] for emb in response.output['embeddings']]
-                   embeddings.extend(batch_embeddings)
-                   time.sleep(0.1)  # 避免API限流
-               except Exception as e:
-                   # 单个处理失败的文本
-                   for text in batch:
-                       try:
-                           emb = self.embed_text(text)
-                           embeddings.append(emb)
-                       except:
-                           embeddings.append([0.0] * 1536)  # 默认维度
-           return embeddings
+           try:
+               return self.embeddings.embed_documents(texts)
+           except Exception as e:
+               # 降级到单个处理
+               embeddings = []
+               for text in texts:
+                   try:
+                       emb = self.embed_text(text)
+                       embeddings.append(emb)
+                   except:
+                       embeddings.append([0.0] * 1536)  # 默认维度
+               return embeddings
    ```
 
 **验收标准**:
@@ -1807,13 +1909,16 @@
 1. **创建检索服务** (`app/services/retrieval_service.py`)
    ```python
    import weaviate
-   from app.services.embedding_service import QwenEmbedding
+   from langchain_community.embeddings import DashScopeEmbeddings
    from typing import List, Dict
 
    class RetrievalService:
        def __init__(self):
            self.client = weaviate.Client("http://localhost:8080")
-           self.embedding_service = QwenEmbedding()
+           # 使用Langchain集成的DashScope向量模型
+           self.embedding_service = DashScopeEmbeddings(
+               model="text-embedding-v4"
+           )
 
        def hybrid_search(self, query: str, top_k: int = 5,
                         vendor_filter: str = None) -> List[Dict]:
@@ -1924,48 +2029,56 @@
 
 3. **集成重排序API** (`app/services/reranker_service.py`)
    ```python
-   import requests
-   import json
+   from langchain_community.document_compressors import LLMChainExtractor
+   from langchain_community.llms import Ollama
+   from langchain.schema import Document
    from typing import List, Dict
+   import os
 
    class RerankerService:
-       def __init__(self, ollama_url="http://localhost:11434"):
-           self.ollama_url = ollama_url
+       def __init__(self, ollama_url=None):
+           """使用Langchain集成OLLAMA重排序模型"""
+           self.ollama_url = ollama_url or os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+
+           # 使用Langchain的Ollama集成
+           self.llm = Ollama(
+               model="qwen3-reranker",
+               base_url=self.ollama_url
+           )
 
        def rerank(self, query: str, documents: List[str]) -> List[float]:
            """使用Qwen3-Reranker对文档重排序"""
            scores = []
 
            for doc in documents:
-               prompt = f"Query: {query}\nDocument: {doc}\nRelevance score:"
+               # 构建重排序提示词
+               prompt = f"""请评估以下文档与查询的相关性，返回0-1之间的分数：
 
-               response = requests.post(
-                   f"{self.ollama_url}/api/generate",
-                   json={
-                       "model": "qwen3-reranker",
-                       "prompt": prompt,
-                       "stream": False
-                   }
-               )
+查询: {query}
 
-               if response.status_code == 200:
-                   result = response.json()
-                   # 解析相关性分数
-                   score = self._parse_score(result.get('response', ''))
+文档: {doc}
+
+相关性分数:"""
+
+               try:
+                   response = self.llm.invoke(prompt)
+                   score = self._parse_score(response)
                    scores.append(score)
-               else:
-                   scores.append(0.0)
+               except Exception as e:
+                   print(f"重排序失败: {e}")
+                   scores.append(0.5)  # 默认分数
 
            return scores
 
        def _parse_score(self, response: str) -> float:
            """解析模型返回的相关性分数"""
            try:
-               # 简单的分数解析逻辑
                import re
-               match = re.search(r'(\d+\.?\d*)', response)
+               # 查找0-1之间的小数
+               match = re.search(r'0\.\d+|1\.0|0|1', response)
                if match:
-                   return float(match.group(1))
+                   score = float(match.group())
+                   return max(0.0, min(1.0, score))  # 确保在0-1范围内
            except:
                pass
            return 0.5  # 默认分数
@@ -2918,14 +3031,17 @@ export SECRET_KEY=dev-secret-key
 export DATABASE_URL=mysql+pymysql://root:password@localhost/ip_expert
 export REDIS_URL=redis://localhost:6379
 
-# AI服务相关
+# AI服务相关 - Langchain统一集成配置
 export DASHSCOPE_API_KEY=your-dashscope-api-key
-export OPENAI_API_KEY=your-dashscope-api-key  # 用于langchain_openai
+export OPENAI_API_KEY=your-dashscope-api-key  # 用于langchain_openai兼容接口
 export OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 # 阿里云文档智能服务
 export ALIBABA_ACCESS_KEY_ID=your-access-key-id
 export ALIBABA_ACCESS_KEY_SECRET=your-access-key-secret
+
+# OLLAMA本地重排序模型服务
+export OLLAMA_BASE_URL=http://localhost:11434
 ```
 
 ---

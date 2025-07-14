@@ -24,12 +24,13 @@
 
 | 技术栈 | 框架/库 | 作用 | 相关依赖 |
 | --- | --- | --- | --- |
-| **文档解析与切分** | 阿里云文档智能 (Document Mind) | 替代传统解析库，实现对复杂文档的细粒度解析和基于版面分析的语义切分 | `alibabacloud_tea_openapi`, `alibabacloud_docmind_api20220711` |
+| **文档解析与切分** | 阿里云文档智能 (Document Mind) | 替代传统解析库，实现对复杂文档的细粒度解析和基于版面分析的语义切分 | `alibabacloud_tea_openapi`, `alibabacloud_docmind_api20220711==1.4.7`, `alibabacloud_credentials` |
+| **AI服务统一集成** | Langchain | 统一集成所有AI服务（云端向量模型、大模型和本地重排序模型），提供一致的API接口 | `langchain`, `langchain-community`, `langchain_openai` |
 | **工作流编排** | langgraph(langchain) | 编排RAG流程，管理prompt、模型和解析器。 | `langgraph`, `langchain` |
 | **向量数据库** | Weaviate | 轻量级的本地向量数据库，通过 Docker 运行，用于本地开发与演示。 | `weaviate-client` |
-| **向量化模型** | `text-embedding-v4` | 阿里云百炼平台提供的向量化模型，用于文本向量化。 | `dashscope` |
-| **重排序模型** | `Qwen3-Reranker` | 通过OLLAMA本地部署的重排序模型。在召回阶段后，对候选文档进行精准排序。 | `ollama` (本地部署) |
-| **大语言模型** | qwen3-plus | 开箱即用的高性能大模型API。 | `dashscope`, `langchain_openai` |
+| **向量化模型** | `text-embedding-v4` | 阿里云百炼平台提供的向量化模型，通过Langchain DashScope集成。 | `langchain-community`, `dashscope` |
+| **重排序模型** | `Qwen3-Reranker` | 通过OLLAMA本地部署的重排序模型，使用Langchain集成。在召回阶段后，对候选文档进行精准排序。 | `ollama` (本地部署), `langchain-community` |
+| **大语言模型** | qwen-plus | 阿里云百炼平台的高性能大模型，通过Langchain OpenAI兼容接口集成。 | `langchain_openai` |
 | **可观测性** | LangSmith (可选) | 用于调试和监控复杂的LLM应用（如Agent）。 | `langsmith` |
 
 
@@ -53,9 +54,9 @@
 | **前端部署** | 阿里云 OSS | **本地开发服务器** | 使用 `vite` 或 `webpack-dev-server` 在本地运行前端应用。 |
 | **后端服务** | 函数计算 FC | **本地运行 Flask 服务** | Flask 应用本身即可在本地直接启动，负责处理所有 API 请求。 |
 | **文档解析处理** | 阿里云文档智能 (Document Mind) | **保留云服务** | 这是项目的核心优势之一，本地库难以实现同等级的版面分析与语义切分。 |
-| **大模型推理** | 阿里云百炼 | **保留云服务** | 直接调用成熟的API服务，免去本地部署麻烦，性能更优。本项目选用 `qwen-plus`。 |
-| **向量模型** | 阿里云百炼平台 | **保留云服务** | 使用Qwen3-Embedding模型，方便统一管理，确保与线上环境一致。 |
-| **重排序模型** | OLLAMA | **本地部署** | 使用Qwen3-Reranker模型，通过OLLAMA在本地部署，提供精准的文档重排序能力。 |
+| **大模型推理** | 阿里云百炼 | **保留云服务** | 通过Langchain OpenAI兼容接口调用`qwen-plus`模型，统一AI服务集成方式。 |
+| **向量模型** | 阿里云百炼平台 | **保留云服务** | 使用`text-embedding-v4`模型，通过Langchain DashScope集成，确保与线上环境一致。 |
+| **重排序模型** | OLLAMA | **本地部署** | 使用`Qwen3-Reranker`模型，通过OLLAMA在本地部署，使用Langchain集成提供统一接口。 |
 | **向量存储** | OpenSearch | **Weaviate (Docker)** | 轻量、高效的开源向量数据库，支持本地部署。 |
 | **知识库存储** | 阿里云 OSS | **本地文件系统** | 将所有上传的原始文档、附件等直接存储在本地磁盘的指定目录中。 |
 | **用户数据库** | RDS for MySQL | **MySQL (Docker)** | 使用 Docker 运行 MySQL 实例，功能对等且便于管理。 |
